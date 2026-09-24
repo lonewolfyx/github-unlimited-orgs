@@ -2,9 +2,11 @@
   "extends": ["@lonewolfyx/tsconfig/tsconfig.lib.json"],
   "compilerOptions": {
     "resolveJsonModule": true,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "declarationMap": false,
     "types": [
-      "node",
-      "tsdown/client"
+      "node"
     ]
   }
 }
