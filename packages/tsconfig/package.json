@@ -1,0 +1,9 @@
+{
+  "name": "@github-unlimited-orgs/tsconfig",
+  "type": "module",
+  "private": true,
+  "devDependencies": {
+    "@lonewolfyx/tsconfig": "^0.0.6",
+    "typescript": "^6.0.3"
+  }
+}
