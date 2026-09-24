@@ -1,0 +1,22 @@
+{
+  "name": "@github-unlimited-orgs/api",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "nitro dev",
+    "build": "nitro build",
+    "preview": "nitro preview"
+  },
+  "dependencies": {
+    "octokit": "^5.0.5"
+  },
+  "devDependencies": {
+    "@github-unlimited-orgs/tsconfig": "workspace:*",
+    "@lonewolfyx/tsconfig": "^0.0.6",
+    "@types/node": "^26.6.2",
+    "defu": "^6.1.7",
+    "nitro": "3.0.260903-beta",
+    "openapi-renderer": "^0.1.1",
+    "typescript": "^6.0.3"
+  }
+}
