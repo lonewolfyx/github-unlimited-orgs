@@ -1,0 +1,9 @@
+{
+  "name": "@github-unlimited-orgs/tampermonkey",
+  "type": "module",
+  "private": true,
+  "scripts": {},
+  "devDependencies": {
+    "@github-unlimited-orgs/tsconfig": "workspace:*"
+  }
+}
