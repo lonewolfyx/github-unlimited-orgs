@@ -1,0 +1,39 @@
+{
+  "name": "github-unlimited-orgs",
+  "type": "module",
+  "private": true,
+  "packageManager": "pnpm@11.24.0",
+  "description": "",
+  "author": "lonewolfyx",
+  "license": "MIT",
+  "homepage": "https://github.com/lonewolfyx/github-unlimited-orgs#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lonewolfyx/github-unlimited-orgs.git"
+  },
+  "bugs": "https://github.com/lonewolfyx/github-unlimited-orgs/issues",
+  "keywords": [
+    "github",
+    "organizations"
+  ],
+  "scripts": {
+    "lint": "eslint",
+    "lint:fix": "eslint --fix"
+  },
+  "devDependencies": {
+    "@antfu/eslint-config": "^9.5.1",
+    "@lonewolfyx/tsconfig": "^0.0.6",
+    "@types/node": "^26.6.2",
+    "eslint": "^10.11.0",
+    "jiti": "^2.7.0",
+    "nitro": "3.0.260903-beta",
+    "typescript": "^6.0.3"
+  },
+  "devEngines": {
+    "packageManager": {
+      "name": "pnpm",
+      "version": "11.24.0",
+      "onFail": "download"
+    }
+  }
+}
