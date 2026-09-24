@@ -4,6 +4,6 @@
   "private": true,
   "devDependencies": {
     "@lonewolfyx/tsconfig": "^0.0.6",
-    "typescript": "^6.0.3"
+    "typescript": "^7.0.2"
   }
 }
