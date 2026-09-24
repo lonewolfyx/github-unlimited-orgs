@@ -1,0 +1,5 @@
+{
+  "extends": "@github-unlimited-orgs/tsconfig/base.json",
+  "compilerOptions": {
+  }
+}

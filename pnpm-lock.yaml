@@ -216,6 +216,18 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3
 
+  packages/chrome-extension:
+    devDependencies:
+      '@github-unlimited-orgs/tsconfig':
+        specifier: workspace:*
+        version: link:../tsconfig
+
+  packages/tampermonkey:
+    devDependencies:
+      '@github-unlimited-orgs/tsconfig':
+        specifier: workspace:*
+        version: link:../tsconfig
+
   packages/tsconfig:
     devDependencies:
       '@lonewolfyx/tsconfig':
