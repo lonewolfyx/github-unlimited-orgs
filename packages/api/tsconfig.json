@@ -1,5 +1,8 @@
 {
-  "extends": ["@lonewolfyx/tsconfig/tsconfig.lib.json", "nitro/tsconfig"],
+  "extends": [
+    "@github-unlimited-orgs/tsconfig/base.json",
+    "nitro/tsconfig"
+  ],
   "compilerOptions": {
     "paths": {
       "@/*": [
@@ -9,11 +12,6 @@
         "./src/types/*",
         "./types/*"
       ]
-    },
-    "resolveJsonModule": true,
-    "types": ["node"],
-    "noUnusedLocals": false,
-    "noUnusedParameters": false,
-    "declarationMap": false
+    }
   }
 }
