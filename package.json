@@ -2,7 +2,7 @@
   "name": "github-unlimited-orgs",
   "type": "module",
   "private": true,
-  "packageManager": "pnpm@11.24.0",
+  "packageManager": "pnpm@11.27.1",
   "description": "Show all GitHub organizations for any user — API + browser extension + Tampermonkey script",
   "author": "lonewolfyx",
   "license": "MIT",
