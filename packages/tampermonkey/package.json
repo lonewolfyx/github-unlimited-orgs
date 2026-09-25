@@ -2,8 +2,13 @@
   "name": "@github-unlimited-orgs/tampermonkey",
   "type": "module",
   "private": true,
-  "scripts": {},
+  "scripts": {
+    "build": "tsdown",
+    "dev": "tsdown --watch"
+  },
   "devDependencies": {
-    "@github-unlimited-orgs/tsconfig": "workspace:*"
+    "@github-unlimited-orgs/core": "workspace:*",
+    "@github-unlimited-orgs/tsconfig": "workspace:*",
+    "tsdown": "^0.23.0"
   }
 }
