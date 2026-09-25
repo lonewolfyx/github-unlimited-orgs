@@ -2,8 +2,13 @@
   "name": "@github-unlimited-orgs/chrome-extension",
   "type": "module",
   "private": true,
-  "scripts": {},
+  "scripts": {
+    "build": "tsdown && cp src/manifest.json dist/manifest.json",
+    "dev": "tsdown --watch"
+  },
   "devDependencies": {
-    "@github-unlimited-orgs/tsconfig": "workspace:*"
+    "@github-unlimited-orgs/core": "workspace:*",
+    "@github-unlimited-orgs/tsconfig": "workspace:*",
+    "tsdown": "^0.23.0"
   }
 }
