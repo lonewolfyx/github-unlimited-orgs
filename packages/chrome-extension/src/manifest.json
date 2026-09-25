@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "GitHub Unlimited Orgs",
+  "version": "0.1.0",
+  "description": "Expand all organizations on GitHub profiles with hover cards.",
+  "content_scripts": [
+    {
+      "matches": ["https://github.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "permissions": ["storage"],
+  "host_permissions": ["http://localhost:3000/*"]
+}
