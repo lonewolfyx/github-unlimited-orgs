@@ -1,5 +1,10 @@
 {
-  "extends": "@github-unlimited-orgs/tsconfig/base.json",
+  "extends": "@lonewolfyx/tsconfig/tsconfig.lib.json",
   "compilerOptions": {
-  }
+    "resolveJsonModule": true,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "declarationMap": false
+  },
+  "include": ["src", "tsdown.config.ts"]
 }
