@@ -222,6 +222,12 @@ importers:
         specifier: workspace:*
         version: link:../tsconfig
 
+  packages/core:
+    devDependencies:
+      '@github-unlimited-orgs/tsconfig':
+        specifier: workspace:*
+        version: link:../tsconfig
+
   packages/tampermonkey:
     devDependencies:
       '@github-unlimited-orgs/tsconfig':
