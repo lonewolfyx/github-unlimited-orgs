@@ -18,13 +18,13 @@ const PANEL_MESSAGE_TYPE = 'guo:side-panel'
 const PANEL_REQUEST_TYPE = 'guo:panel-request'
 
 /** 最近一次劫持到的 side-panel JSON（回放用） */
-let lastPanelData: unknown = null
+let lastPanelData: object | false = false
 
-const origFetch = window.fetch
-window.fetch = function patchedFetch(...args: unknown[]) {
-  const promise = origFetch.apply(this, args as Parameters<typeof origFetch>)
+const originalFetch = window.fetch.bind(window)
+window.fetch = (...args: Parameters<typeof window.fetch>) => {
+  const promise = originalFetch(...args)
   try {
-    const input = args[0] as string | URL | Request | undefined
+    const input = args[0]
     const url = typeof input === 'string'
       ? input
       : input instanceof URL
@@ -36,8 +36,8 @@ window.fetch = function patchedFetch(...args: unknown[]) {
       void promise.then((res) => {
         try {
           void res.clone().json().then((data) => {
-            lastPanelData = data
-            window.postMessage({ type: PANEL_MESSAGE_TYPE, data }, '*')
+            lastPanelData = data as object
+            window.postMessage({ type: PANEL_MESSAGE_TYPE, data }, location.origin)
           })
         }
         catch {}
@@ -52,8 +52,9 @@ window.fetch = function patchedFetch(...args: unknown[]) {
 window.addEventListener('message', (e) => {
   if (e.source !== window)
     return
-  if ((e.data as { type?: string } | null)?.type !== PANEL_REQUEST_TYPE)
+  const message = e.data as { type: string }
+  if (!e.data || message.type !== PANEL_REQUEST_TYPE)
     return
-  if (lastPanelData != null)
-    window.postMessage({ type: PANEL_MESSAGE_TYPE, data: lastPanelData }, '*')
+  if (lastPanelData)
+    window.postMessage({ type: PANEL_MESSAGE_TYPE, data: lastPanelData }, location.origin)
 })

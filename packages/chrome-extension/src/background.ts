@@ -8,40 +8,42 @@
 
 // TODO(M4): 生产部署后替换为正式 API 域名，并通过 chrome.storage.sync 支持覆盖
 const API_BASE = 'http://localhost:3000'
+const API_TIMEOUT_MS = 10_000
 
 interface FetchOrgsMessage {
   type: 'guo:fetch-orgs'
   username: string
 }
 
-interface FetchResponse {
-  ok: boolean
-  data?: unknown
-  error?: string
-}
+type FetchResponse
+  = | { ok: true, data: object[] }
+    | { ok: false, error: string }
 
-const log = (...args: unknown[]): void => console.info('%c[GUO:bg]', 'color:#8250df;font-weight:bold', ...args)
+const GITHUB_USERNAME_RE = /^[\w-]{1,39}$/u
 
-chrome.runtime.onMessage.addListener((message: Partial<FetchOrgsMessage>, _sender, sendResponse) => {
-  if (message?.type !== 'guo:fetch-orgs' || !message.username)
+chrome.runtime.onMessage.addListener((message: FetchOrgsMessage, _sender, sendResponse) => {
+  if (!message || message.type !== 'guo:fetch-orgs' || !GITHUB_USERNAME_RE.test(message.username))
     return
 
   const url = `${API_BASE}/${encodeURIComponent(message.username)}`
-  log(`收到请求，转发到 ${url}`)
-  fetch(url)
+  fetch(url, { signal: AbortSignal.timeout(API_TIMEOUT_MS) })
     .then(async (res) => {
       if (!res.ok) {
-        log(`API 返回 ${res.status}`)
-        sendResponse({ ok: false, error: `API 请求失败：HTTP ${res.status}` } satisfies FetchResponse)
+        sendResponse({
+          ok: false,
+          error: `API 请求失败：HTTP ${res.status}`,
+        } satisfies FetchResponse)
         return
       }
-      const data = await res.json()
-      log(`API 成功：${Array.isArray(data) ? `${data.length} 个组织` : '格式异常'}`)
+      const data = await res.json() as object[]
+      if (!Array.isArray(data)) {
+        sendResponse({ ok: false, error: 'API 响应格式异常' } satisfies FetchResponse)
+        return
+      }
       sendResponse({ ok: true, data } satisfies FetchResponse)
     })
-    .catch((err: unknown) => {
-      console.error('[GUO:bg] fetch 失败（dev server 是否在运行？）', err)
-      sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) } satisfies FetchResponse)
+    .catch(() => {
+      sendResponse({ ok: false, error: 'API 请求失败' } satisfies FetchResponse)
     })
 
   return true // 保持消息通道开启以支持异步 sendResponse
