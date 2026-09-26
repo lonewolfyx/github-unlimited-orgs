@@ -67,7 +67,7 @@ const MORE_TEXT_RE = /^\+\s*\d+\s+more$/u
 const ORG_HINT_SELECTOR = 'a[href$="?tab=organizations"], a[href="/settings/organizations"], h2, h3'
 const LOG_STYLE = 'color:#0969da;font-weight:600'
 
-/** GitHub 的单段顶级路由；这些路径不能当作用户或组织名。 */
+/** Single-segment top-level GitHub routes that cannot be user or organization names. */
 const RESERVED_PATHS = new Set([
   'about',
   'account',
@@ -242,7 +242,7 @@ function fetchOrgs(username: string): Promise<FetchOrgsResponse> {
       return { ok: true, data: response.data.filter(isOrgInfo) }
     }
     catch {
-      return { ok: false, error: '扩展后台未响应' }
+      return { ok: false, error: 'The extension background service did not respond' }
     }
   })()
 
@@ -367,12 +367,12 @@ function logDiagnostic(route: ProfileRoute, summary: DiagnosticSummary): void {
 
   loggedRouteKey = route.key
   console.groupCollapsed(`%c[GUO] ${route.username} · ${summary.status}`, LOG_STYLE)
-  console.info('页面', route.key)
-  console.info('数据源', summary.source)
-  console.info('组织', `获取 ${summary.total} / 已显示 ${summary.shown} / 新增 ${summary.injected}`)
+  console.info('Page', route.key)
+  console.info('Data source', summary.source)
+  console.info('Organizations', `Fetched ${summary.total} / Displayed ${summary.shown} / Injected ${summary.injected}`)
   if (summary.detail)
-    console.info('说明', summary.detail)
-  console.info('耗时', `${Math.round(performance.now() - routeStartedAt)}ms`)
+    console.info('Details', summary.detail)
+  console.info('Duration', `${Math.round(performance.now() - routeStartedAt)}ms`)
   console.groupEnd()
 }
 
@@ -412,12 +412,12 @@ function observeForSection(route: ProfileRoute): void {
     if (activeRouteKey === route.key && !state) {
       domObserver.disconnect()
       logDiagnostic(route, {
-        status: '未找到组织区块',
-        source: '无',
+        status: 'Organization section not found',
+        source: 'None',
         total: 0,
         shown: 0,
         injected: 0,
-        detail: '页面可能没有组织，或 GitHub 页面结构已变化',
+        detail: 'The page may not list any organizations, or GitHub may have changed its page structure',
       })
     }
   }, SECTION_DISCOVERY_WINDOW_MS)
@@ -475,12 +475,12 @@ function beginPanelWait(route: ProfileRoute): void {
     panelWaitUsername = ''
     panelUnavailableRouteKey = route.key
     logDiagnostic(route, {
-      status: '等待数据超时',
+      status: 'Timed out waiting for data',
       source: 'GitHub side-panel',
       total: 0,
       shown: 0,
       injected: 0,
-      detail: `${PANEL_WAIT_MS}ms 内未收到组织数据`,
+      detail: `No organization data received within ${PANEL_WAIT_MS}ms`,
     })
   }, PANEL_WAIT_MS)
 }
@@ -506,7 +506,7 @@ async function scan(): Promise<void> {
   }
 
   let orgs: OrgInfo[]
-  let source = '自建 API'
+  let source = 'Custom API'
   if (section.kind === 'self') {
     source = 'GitHub side-panel'
     if (hasLatestPanelOptions && panelPageUsername === route.username) {
@@ -529,12 +529,12 @@ async function scan(): Promise<void> {
     panelPageUsername = ''
     if ((failedUntil.get(route.username) ?? 0) > Date.now()) {
       logDiagnostic(route, {
-        status: '请求冷却中',
+        status: 'Request cooldown active',
         source,
         total: 0,
         shown: 0,
         injected: 0,
-        detail: '此前请求失败，冷却期内不再重复请求',
+        detail: 'A previous request failed; skipping repeat requests during the cooldown period',
       })
       return
     }
@@ -544,7 +544,7 @@ async function scan(): Promise<void> {
     if (!response.ok) {
       failedUntil.set(route.username, Date.now() + FETCH_FAILURE_COOLDOWN_MS)
       logDiagnostic(route, {
-        status: '获取组织失败',
+        status: 'Failed to fetch organizations',
         source,
         total: 0,
         shown: 0,
@@ -566,12 +566,14 @@ async function scan(): Promise<void> {
 
   const result = injectOrganizations(section, orgs)
   logDiagnostic(route, {
-    status: result.injected > 0 ? '增强完成' : '页面已完整',
+    status: result.injected > 0 ? 'Enhancement complete' : 'Page already complete',
     source,
     total: orgs.length,
     shown: result.shown,
     injected: result.injected,
-    detail: result.injected > 0 ? '已使用 GitHub 原生 hovercard' : '无需注入额外组织',
+    detail: result.injected > 0
+      ? 'Injected organizations use GitHub native hovercards'
+      : 'No additional organizations need to be injected',
   })
   if (state)
     observeInjectedState(state)
