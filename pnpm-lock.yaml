@@ -236,9 +236,6 @@ importers:
 
   packages/tampermonkey:
     devDependencies:
-      '@github-unlimited-orgs/core':
-        specifier: workspace:*
-        version: link:../core
       '@github-unlimited-orgs/tsconfig':
         specifier: workspace:*
         version: link:../tsconfig

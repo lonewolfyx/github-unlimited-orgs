@@ -1,6 +1,6 @@
 /**
- * Tampermonkey 元数据头，构建时由 tsdown 以 banner 注入产物顶部。
- * 发布后需补充 @downloadURL / @updateURL 并保证版本号严格递增。
+ * Tampermonkey metadata header, injected at the top of the bundle by tsdown as a banner.
+ * After publishing, add @downloadURL / @updateURL and keep the version strictly increasing.
  */
 export const userscriptHeader = `// ==UserScript==
 // @name         GitHub Unlimited Orgs
@@ -9,8 +9,11 @@ export const userscriptHeader = `// ==UserScript==
 // @description  Expand all organizations on GitHub profiles with hover cards
 // @author       lonewolfyx
 // @match        https://github.com/*
-// @run-at       document-idle
-// @grant        none
+// @run-at       document-start
+// @sandbox      DOM
+// @grant        GM_addElement
+// @grant        GM_xmlhttpRequest
+// @connect      localhost
 // @noframes
 // @homepageURL  https://github.com/lonewolfyx/github-unlimited-orgs
 // @supportURL   https://github.com/lonewolfyx/github-unlimited-orgs/issues
