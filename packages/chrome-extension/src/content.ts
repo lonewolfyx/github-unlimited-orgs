@@ -104,7 +104,7 @@ function resolveContainer(node: Element): HTMLElement | null {
   return null
 }
 
-/** 在容器内寻找文本为 "+N more" 的最内层元素 */
+/** 在容器内寻找展开入口："+N more" 文本元素，或 "View all" 链接（登录用户看自己主页时） */
 function findMoreElement(container: HTMLElement): HTMLElement | null {
   for (const el of container.querySelectorAll<HTMLElement>('*')) {
     if (el.children.length > 0)
@@ -112,7 +112,9 @@ function findMoreElement(container: HTMLElement): HTMLElement | null {
     if (MORE_TEXT_RE.test(el.textContent?.trim() ?? ''))
       return el
   }
-  return null
+  // 登录用户访问自己主页时不显示 "+N more"，而是：
+  // <div class="mt-2 tmp-mt-2"><a href="/settings/organizations" class="Link">View all</a></div>
+  return container.querySelector<HTMLElement>('a[href="/settings/organizations"]')
 }
 
 function findOrgSection(): OrgSection | null {
@@ -366,7 +368,7 @@ async function scan(): Promise<void> {
     return
   }
   if (!section.moreEl) {
-    log('找到区块但没有 "+N more"，视为已展示全部组织')
+    log('找到区块但没有 "+N more" / "View all" 入口，视为已展示全部组织')
     return
   }
 
