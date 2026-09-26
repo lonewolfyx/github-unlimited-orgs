@@ -1,28 +1,22 @@
 /**
  * GitHub Unlimited Orgs — content script（子项目独立实现，不依赖 workspace 其他包）
  *
- * 基于对 github.com 真实用户主页的分析（2026-09）：
- * - 组织区块是左侧边栏 `<div class="border-top ... clearfix">` 里的
- *   `<h2 class="mb-2 h4">Organizations</h2>` + 若干原生头像链接；
- * - 原生头像链接结构：
- *   `a.avatar-group-item[data-hovercard-type="organization"]`
- *   `[data-hovercard-url="/orgs/{org}/hovercard"][href="/{org}"] > img.avatar`
- * - 隐藏部分在页面里只是一个纯文本元素 `+ N more`（匿名态为 span，无任何交互）；
- * - GitHub 原生悬停卡片靠 `data-hovercard-url` 属性的事件委托驱动，
- *   动态插入且带该属性的元素会自动获得原生 hovercard，无需自己实现卡片。
+ * 页面分类（本次需求的核心判定，封装在 findOrgSection/findEntry 中）：
+ * - self  ：登录用户访问自身主页。特征是组织区块尾部出现 "View all" 链接
+ *   （href=/settings/organizations）。组织数据来自劫持的 GitHub 自有接口
+ *   /_side-panels/user.json（见 main-world.ts），不调用自建 API。
+ * - other ：三方用户页面。特征是组织区块尾部出现 "+N more" 文本。
+ *   组织数据来自自建 API（实时请求，不做任何缓存）。
+ * - none  ：两种入口都不存在（页面已展示全部组织），不做任何事。
  *
- * 因此本脚本只做三件事：
- * 1. 定位 Organizations 区块与展开入口（"+N more" 文本，或登录用户看自己主页时的
- *    "View all" 链接）；
- * 2. 拿到该用户全部组织列表（两条数据通道，见下）；
- * 3. 按GitHub 原生 DOM 结构注入隐藏组织头像
- *    （自带 data-hovercard-url，悬停事件由 GitHub 自己的 JS 处理），默认展开。
+ * 劫持驱动时机：main-world.js 以 MAIN world + document_start 注入，
+ * 在页面开始加载时就 patch 好 fetch，保证 GitHub 首次发出 side-panel
+ * 请求时即可拦截到响应（postMessage 转发给本脚本）。
  *
- * 数据通道（按优先级）：
- * - 登录态：劫持 GitHub 自己的右侧面板请求 `/_side-panels/user.json`
- *   （见 main-world.ts），其 userStatus.organizationOptions 携带完整组织列表，
- *   不再调用自建 API；
- * - 匿名态：GitHub 不会发起该请求，回落到自建 API（经 background 代理）。
+ * 注入规则：先过滤掉页面已展示的组织，再按 GitHub 原生 DOM 结构注入
+ * 剩余组织头像 —— 携带 data-hovercard-url，悬停卡片由 GitHub 原生事件
+ * 委托处理（本脚本不绑定任何 hover 事件、不实现卡片）；头像之间补
+ * 空白文本节点以保持原生 inline-block 间距；注入后自动展开并隐藏入口。
  */
 
 interface OrgInfo {
@@ -45,15 +39,22 @@ interface SidePanelData {
   }
 }
 
-// TODO(M4): 生产部署后替换为正式 API 域名
-const CACHE_PREFIX = 'guo:orgs:'
-const CACHE_TTL_MS = 30 * 60 * 1000
 const RESCAN_DEBOUNCE_MS = 300
+/** 三方页面 API 失败后的内存级冷却（防 MutationObserver 反复触发打爆接口） */
 const FETCH_FAILURE_COOLDOWN_MS = 60_000
-const PANEL_URL_RE = /\/_side-panels\/user\.json(?:[?#]|$)/
 const PANEL_MESSAGE_TYPE = 'guo:side-panel'
-/** 登录态下等待 GitHub 发起 side-panel 请求的最长时间，超时回落自建 API */
+const PANEL_REQUEST_TYPE = 'guo:panel-request'
+/** 自身页面等待劫持数据到达的最长时间，超时放弃（不回落自建 API） */
 const PANEL_WAIT_MS = 8_000
+
+// ---------------------------------------------------------------------------
+// 诊断日志：DevTools Console 按 [GUO] 过滤
+// ---------------------------------------------------------------------------
+
+const log = (...args: unknown[]): void => console.info('%c[GUO]', 'color:#0969da;font-weight:bold', ...args)
+
+declare const __GUO_BUILD__: string
+log(`content script 已加载（build ${__GUO_BUILD__}）`)
 
 // ---------------------------------------------------------------------------
 // 用户名解析
@@ -107,11 +108,15 @@ function getProfileUsername(pathname: string = location.pathname): string | null
 /** "+N more" 文案（兼容本地化空白差异，不匹配具体语言） */
 const MORE_TEXT_RE = /^\+\s*\d+\s+more$/u
 
+/** 展开入口类型：self = View all（登录用户自身页面）；other = +N more（三方用户页面） */
+type EntryKind = 'self' | 'other'
+
 interface OrgSection {
-  /** 包含原生组织头像与 "+N more" 文本的容器元素 */
+  /** 包含原生组织头像与展开入口的容器元素 */
   container: HTMLElement
-  /** "+N more" 元素（匿名态为 span，登录态可能是 a），找不到时为 null */
-  moreEl: HTMLElement | null
+  /** 入口元素（"View all" 链接或 "+N more" 文本） */
+  entry: HTMLElement
+  kind: EntryKind
 }
 
 /** 从锚点/标题向上寻找包含组织头像（img）的最近祖先作为区块容器 */
@@ -125,17 +130,22 @@ function resolveContainer(node: Element): HTMLElement | null {
   return null
 }
 
-/** 在容器内寻找展开入口："+N more" 文本元素，或 "View all" 链接（登录用户看自己主页时） */
-function findMoreElement(container: HTMLElement): HTMLElement | null {
+/**
+ * 识别组织区块的展开入口（页面分类的核心判定）：
+ * - "+N more" 最内层文本元素 → other（三方用户页面）
+ * - "View all" 链接（登录用户看自己主页时才有）→ self
+ */
+function findEntry(container: HTMLElement): { el: HTMLElement, kind: EntryKind } | null {
   for (const el of container.querySelectorAll<HTMLElement>('*')) {
     if (el.children.length > 0)
       continue
     if (MORE_TEXT_RE.test(el.textContent?.trim() ?? ''))
-      return el
+      return { el, kind: 'other' }
   }
-  // 登录用户访问自己主页时不显示 "+N more"，而是：
-  // <div class="mt-2 tmp-mt-2"><a href="/settings/organizations" class="Link">View all</a></div>
-  return container.querySelector<HTMLElement>('a[href="/settings/organizations"]')
+  const viewAll = container.querySelector<HTMLElement>('a[href="/settings/organizations"]')
+  if (viewAll)
+    return { el: viewAll, kind: 'self' }
+  return null
 }
 
 function findOrgSection(): OrgSection | null {
@@ -144,16 +154,19 @@ function findOrgSection(): OrgSection | null {
     if (MORE_TEXT_RE.test(link.textContent?.trim() ?? '')) {
       const container = resolveContainer(link)
       if (container)
-        return { container, moreEl: link }
+        return { container, entry: link, kind: 'other' }
     }
   }
 
-  // 策略 2：真实 DOM 的 <h2>Organizations</h2>（匿名态没有 tab 链接，靠它兜底）
+  // 策略 2：真实 DOM 的 <h2>Organizations</h2>（匿名态与新版页面均无 tab 链接）
   for (const heading of document.querySelectorAll<HTMLElement>('h2, h3')) {
     if ((heading.textContent?.trim() ?? '') === 'Organizations') {
       const container = resolveContainer(heading)
-      if (container)
-        return { container, moreEl: findMoreElement(container) }
+      if (container) {
+        const entry = findEntry(container)
+        if (entry)
+          return { container, entry: entry.el, kind: entry.kind }
+      }
     }
   }
 
@@ -174,7 +187,7 @@ function loginFromHref(href: string): string | null {
   }
 }
 
-/** 容器内已展示的组织 login 集合 */
+/** 容器内已展示的组织 login 集合（注入前过滤用） */
 function existingLogins(container: HTMLElement): Set<string> {
   const set = new Set<string>()
   for (const a of container.querySelectorAll<HTMLAnchorElement>('a.avatar-group-item[href]')) {
@@ -186,63 +199,81 @@ function existingLogins(container: HTMLElement): Set<string> {
 }
 
 // ---------------------------------------------------------------------------
-// 数据获取：content script 的 fetch 以 github.com 源发起、受 CORS 限制，
-// 因此实际请求由 background service worker 代理（见 background.ts）
+// 数据通道 A（self 页面）：劫持的 side-panel 数据
 // ---------------------------------------------------------------------------
 
-// ---------------------------------------------------------------------------
-// 诊断日志：全链路打点，DevTools Console 里按 [GUO] 过滤即可定位失败环节
-// ---------------------------------------------------------------------------
+/** 最近一次劫持到的 organizationOptions（消费后置空，避免串页复用） */
+let latestPanelOptions: Array<{ label: string, value: number }> | null = null
+/** 劫持数据所属的页面用户名（消费前校验，防止跨页串数据） */
+let panelPageUsername: string | null = null
+/** 首次进入等待流程的时间戳，用于超时放弃 */
+let panelWaitStart = 0
 
-const log = (...args: unknown[]): void => console.info('%c[GUO]', 'color:#0969da;font-weight:bold', ...args)
+window.addEventListener('message', (e) => {
+  if (e.source !== window || (e.data as { type?: string } | null)?.type !== PANEL_MESSAGE_TYPE)
+    return
+  // 已注入（或正在处理）时忽略重复响应，避免 GitHub 重发导致反复重建
+  if (state)
+    return
+  // 劫持数据只对自身页面（View all 入口）有意义：
+  // 三方页面（+N more）走自建 API，忽略 panel 响应，不让它触发重扫
+  const section = findOrgSection()
+  if (!section || section.kind !== 'self')
+    return
+  const data = (e.data as { data?: SidePanelData }).data
+  const options = data?.userStatus?.organizationOptions
+  if (!Array.isArray(options))
+    return
+  latestPanelOptions = options.map(o => ({ label: o.label, value: o.value }))
+  panelPageUsername = getProfileUsername()
+  log(`劫持 side-panel 响应：${latestPanelOptions.length} 个组织`)
+  // 请求晚于 scan 时由此触发下一轮扫描
+  scheduleScan()
+})
 
-function readCache(username: string): OrgInfo[] | null {
-  try {
-    const raw = sessionStorage.getItem(CACHE_PREFIX + username)
-    if (!raw)
-      return null
-    const entry = JSON.parse(raw) as { time: number, data: OrgInfo[] }
-    if (!Array.isArray(entry.data) || Date.now() - entry.time > CACHE_TTL_MS)
-      return null
-    return entry.data
-  }
-  catch {
-    return null
-  }
+/** 丢弃当前持有的 side-panel 数据：跨页导航后旧数据已无效，非 self 页面也不应消费 */
+function dropPanelOptions(): void {
+  latestPanelOptions = null
 }
 
-function writeCache(username: string, data: OrgInfo[]): void {
-  try {
-    sessionStorage.setItem(CACHE_PREFIX + username, JSON.stringify({ time: Date.now(), data }))
-  }
-  catch {
-    // 存储不可用（隐私模式等）时静默降级
-  }
+/** organizationOptions → OrgInfo[]：label 即 login，value 即组织数据库 ID（可拼头像） */
+function orgsFromPanel(options: Array<{ label: string, value: number }>): OrgInfo[] {
+  return options.map(o => ({
+    username: o.label,
+    lable: o.label,
+    avatar: `https://avatars.githubusercontent.com/u/${o.value}?s=64&v=4`,
+  }))
 }
 
-async function fetchOrgs(username: string): Promise<OrgInfo[]> {
-  const cached = readCache(username)
-  if (cached) {
-    log(`命中缓存 ${username}：${cached.length} 个组织`)
-    return cached
-  }
+// ---------------------------------------------------------------------------
+// 数据通道 B（other 页面）：自建 API，实时请求、不缓存。
+// content script 的 fetch 以 github.com 源发起、受 CORS 限制，
+// 实际请求由 background service worker 代理（见 background.ts）
+// ---------------------------------------------------------------------------
 
-  log(`请求 API：${username}`)
-  try {
+/** 进行中的 API 请求（同用户并发 scan 共享同一 Promise，避免重复请求） */
+let inflight: { username: string, promise: Promise<OrgInfo[]> } | null = null
+
+function fetchOrgs(username: string): Promise<OrgInfo[]> {
+  if (inflight?.username === username)
+    return inflight.promise
+
+  const promise = (async () => {
     const res = await chrome.runtime.sendMessage({ type: 'guo:fetch-orgs', username })
     if (!res?.ok)
       throw new Error(res?.error ?? 'background 未响应（扩展可能刚重载，请刷新页面）')
     const data = res.data as OrgInfo[]
     if (!Array.isArray(data))
       throw new Error('API 响应格式异常')
-    log(`API 成功：${data.length} 个组织`)
-    writeCache(username, data)
     return data
-  }
-  catch (err) {
-    console.error('[GUO] API 失败：', err)
-    throw err
-  }
+  })()
+
+  inflight = { username, promise }
+  void promise.finally(() => {
+    if (inflight?.promise === promise)
+      inflight = null
+  })
+  return promise
 }
 
 // ---------------------------------------------------------------------------
@@ -273,7 +304,7 @@ function createOrgLink(org: OrgInfo): HTMLAnchorElement {
   return a
 }
 
-/** moreEl 在 container 内的顶层包装（原生为一个 div.d-inline-block），作为插入点 */
+/** 入口元素在 container 内的顶层包装（原生为一个 div），作为插入点 */
 function topLevelWrapper(el: HTMLElement, container: HTMLElement): Element {
   let node: Element = el
   while (node.parentElement && node.parentElement !== container)
@@ -283,12 +314,12 @@ function topLevelWrapper(el: HTMLElement, container: HTMLElement): Element {
 
 interface InjectedState {
   container: HTMLElement
-  moreEl: HTMLElement
+  entryEl: HTMLElement
   insertMarker: Element | null
   orgs: OrgInfo[]
   injected: HTMLAnchorElement[]
   expanded: boolean
-  onMoreClick: ((e: MouseEvent) => void) | null
+  onEntryClick: ((e: MouseEvent) => void) | null
 }
 
 let state: InjectedState | null = null
@@ -308,7 +339,7 @@ function expand(s: InjectedState): void {
     s.container.insertBefore(frag, s.insertMarker)
   else
     s.container.append(frag)
-  s.moreEl.style.display = 'none'
+  s.entryEl.style.display = 'none'
   s.expanded = true
   log(`展开：注入 ${s.injected.length} 个头像`)
 }
@@ -317,20 +348,20 @@ function collapse(s: InjectedState): void {
   for (const a of s.injected)
     a.remove()
   s.injected = []
-  s.moreEl.style.display = ''
+  s.entryEl.style.display = ''
   s.expanded = false
 }
 
-function bindMoreInteraction(s: InjectedState): void {
-  const el = s.moreEl
+function bindEntryInteraction(s: InjectedState): void {
+  const el = s.entryEl
   // 原生 span 无任何交互样式，补一个指针光标；a/button 本身可聚焦则不动
   if (!(el instanceof HTMLAnchorElement) && !(el instanceof HTMLButtonElement))
     el.style.cursor = 'pointer'
 
-  s.onMoreClick = (e) => {
+  s.onEntryClick = (e) => {
     if (e.defaultPrevented)
       return
-    // 修饰键点击 a 时保留原生跳转（组织 Tab 页）
+    // 修饰键点击 a 时保留原生跳转
     if (el instanceof HTMLAnchorElement && (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey))
       return
     e.preventDefault()
@@ -340,16 +371,16 @@ function bindMoreInteraction(s: InjectedState): void {
     else
       expand(s)
   }
-  el.addEventListener('click', s.onMoreClick, true)
+  el.addEventListener('click', s.onEntryClick, true)
 }
 
 function teardown(): void {
   if (state) {
     try {
-      if (state.onMoreClick)
-        state.moreEl.removeEventListener('click', state.onMoreClick, true)
-      state.moreEl.style.display = ''
-      state.moreEl.style.cursor = ''
+      if (state.onEntryClick)
+        state.entryEl.removeEventListener('click', state.onEntryClick, true)
+      state.entryEl.style.display = ''
+      state.entryEl.style.cursor = ''
       for (const a of state.injected)
         a.remove()
     }
@@ -360,58 +391,35 @@ function teardown(): void {
 }
 
 // ---------------------------------------------------------------------------
-// side-panel 数据通道（登录态）：接收 main-world.ts 转发的 _side-panels/user.json
-// ---------------------------------------------------------------------------
-
-/** 最近一次劫持到的 side-panel 数据（消费后置空，避免串页复用） */
-let latestPanelOptions: Array<{ label: string, value: number }> | null = null
-/** 首次进入登录态等待流程的时间戳，用于超时回落 */
-let panelWaitStart = 0
-
-window.addEventListener('message', (e) => {
-  if (e.source !== window || (e.data as { type?: string } | null)?.type !== PANEL_MESSAGE_TYPE)
-    return
-  const data = (e.data as { data?: SidePanelData }).data
-  const options = data?.userStatus?.organizationOptions
-  if (!Array.isArray(options))
-    return
-  latestPanelOptions = options.map(o => ({ label: o.label, value: o.value }))
-  log(`劫持 side-panel 响应：${latestPanelOptions.length} 个组织`)
-  // 请求晚于 scan 时由此触发下一轮扫描
-  scheduleScan()
-})
-
-/** 是否登录态（GitHub 页面内嵌的 user-login meta） */
-function isLoggedIn(): boolean {
-  return !!document.querySelector<HTMLMetaElement>('meta[name="user-login"]')?.content
-}
-
-/** organizationOptions → OrgInfo[]：value 即组织数据库 ID，可直接拼头像；label 即 login */
-function orgsFromPanel(options: Array<{ label: string, value: number }>): OrgInfo[] {
-  return options.map(o => ({
-    username: o.label,
-    lable: o.label,
-    avatar: `https://avatars.githubusercontent.com/u/${o.value}?s=64&v=4`,
-  }))
-}
-
-// ---------------------------------------------------------------------------
 // 扫描调度：首次执行 + MutationObserver 自愈 + GitHub 软导航兜底
 // ---------------------------------------------------------------------------
 
 let scanToken = 0
 let scanTimer: ReturnType<typeof setTimeout> | undefined
-const orgCache = new Map<string, OrgInfo[]>()
 const failedUntil = new Map<string, number>()
+/** self 页面进入等待态的用户名：等待期间 observer 触发的扫描直接跳过 */
+let panelWaitUsername: string | null = null
+/** 本次页面会话内最近一次 API 拉取结果（仅用于同页重渲染自愈，跨导航/刷新即失效） */
+let lastFetched: { username: string, orgs: OrgInfo[] } | null = null
 
 async function scan(): Promise<void> {
-  const token = ++scanToken
   const username = getProfileUsername()
 
-  // 同一主页且注入仍然存活时跳过（自身注入触发的 MutationObserver 会再次进入这里）；
-  // 但刚劫持到 side-panel 数据时必须重扫，用完整数据刷新已有注入
-  if (username && username === enhancedUsername && state?.container.isConnected && !latestPanelOptions)
+  // 守卫 1：同一主页且注入仍然完整存活时跳过；
+  // 若页面重渲染撕掉了注入头像（容器还在），守卫失效以触发自愈重注入
+  if (username && username === enhancedUsername && state
+    && state.injected.length > 0 && state.injected.every(a => a.isConnected)
+    && !latestPanelOptions)
     return
+  // 守卫 2：self 页面已进入等待态，劫持数据到达前无需重扫（消息到达会主动触发）
+  if (username && username === panelWaitUsername && !latestPanelOptions && !state)
+    return
+  // 守卫 3：该页面的 API 请求正在飞行中，本轮 scan 等它返回后自然完成注入，无需并发重扫
+  if (username && inflight?.username === username && !latestPanelOptions)
+    return
+
+  // 通过守卫后才登记本轮 token：被守卫拦下的扫描不得使在飞结果失效
+  const token = ++scanToken
 
   teardown()
   panelWaitStart = 0
@@ -426,64 +434,69 @@ async function scan(): Promise<void> {
     log('未找到 Organizations 区块（页面结构可能变化，或当前页无组织）')
     return
   }
-  if (!section.moreEl) {
-    log('找到区块但没有 "+N more" / "View all" 入口，视为已展示全部组织')
-    return
-  }
 
   let orgs: OrgInfo[] | undefined
 
-  if (isLoggedIn()) {
-    // 通道 1（登录态）：side-panel 数据是唯一真相源。
-    // 不读自建 API 的 sessionStorage/内存缓存 —— 那份列表不完整（如 15 vs 79）。
-    if (latestPanelOptions) {
+  if (section.kind === 'self') {
+    // 自身登录页面：只消费劫持数据，不调用自建 API
+    if (latestPanelOptions && panelPageUsername === username) {
       orgs = orgsFromPanel(latestPanelOptions)
       latestPanelOptions = null
-      orgCache.set(username, orgs)
-      log(`side-panel 通道：${orgs.length} 个组织`)
+      panelWaitUsername = null
+      log(`劫持数据通道：${orgs.length} 个组织`)
     }
     else if (!panelWaitStart) {
       panelWaitStart = Date.now()
-    }
-    else if (Date.now() - panelWaitStart < PANEL_WAIT_MS) {
-      log('等待 GitHub side-panel 请求…')
-      return // 消息到达后 scheduleScan 会再次进入
+      panelWaitUsername = username
+      // 主动向 main-world 索取回放：劫持可能发生在本脚本注入之前（页面加载早期）
+      window.postMessage({ type: PANEL_REQUEST_TYPE }, '*')
+      log('等待 GitHub side-panel 数据…')
+      return // 回放/新响应到达后 scheduleScan 会再次进入
     }
     else {
-      log(`side-panel 等待超时（${PANEL_WAIT_MS}ms），回落自建 API`)
-      try {
-        orgs = await fetchOrgs(username)
-      }
-      catch {
-        failedUntil.set(username, Date.now() + FETCH_FAILURE_COOLDOWN_MS)
-        return
-      }
+      log(`等待超时（${PANEL_WAIT_MS}ms），放弃注入（自身页面不调用自建 API）`)
+      panelWaitUsername = null
+      return
     }
   }
   else {
-    // 通道 2（匿名态）：自建 API（含 sessionStorage 缓存）
-    orgs = orgCache.get(username)
-    if (!orgs) {
+    // 三方用户页面：实时调用自建 API（不缓存）。
+    // 例外：同一次页面会话内刚拉取过（GitHub 重渲染撕掉了注入需要自愈），
+    // 复用本次会话的数据直接重注入，不算缓存、跨导航/刷新后必然重新请求。
+    if (lastFetched && lastFetched.username === username) {
+      orgs = lastFetched.orgs
+      log(`复用本次会话数据：${orgs.length} 个组织`)
+    }
+    else {
+      // 手上若还持有别的页面劫持的 panel 数据，在这里一并丢弃，
+      // 否则它会一直让"已注入跳过"守卫失效，导致反复 teardown + 重复请求。
+      dropPanelOptions()
       if ((failedUntil.get(username) ?? 0) > Date.now()) {
         log('API 失败冷却期内，本轮跳过')
         return
       }
       try {
         orgs = await fetchOrgs(username)
-        orgCache.set(username, orgs)
+        lastFetched = { username, orgs }
       }
-      catch {
-        // 静默降级：保留原生 "+N more"，冷却期内不再重试
+      catch (err) {
+        console.error('[GUO] API 失败：', err)
         failedUntil.set(username, Date.now() + FETCH_FAILURE_COOLDOWN_MS)
         return
       }
     }
   }
+
   if (token !== scanToken)
     return // 扫描期间发生了导航，丢弃本次结果
   if (!orgs)
     return // 两条通道都未产出数据（理论上不可达）
 
+  // 结果日志在 token 校验之后打，保证即使并发 scan 共享了同一请求也只记录一次
+  if (section.kind === 'other')
+    log(`API 实时返回：${orgs.length} 个组织`)
+
+  // 过滤掉页面已展示的组织，只注入缺失部分
   const shown = existingLogins(section.container)
   const extra = orgs.filter(o => !shown.has(o.username.toLowerCase()))
   if (extra.length === 0) {
@@ -493,16 +506,15 @@ async function scan(): Promise<void> {
 
   state = {
     container: section.container,
-    moreEl: section.moreEl,
-    insertMarker: topLevelWrapper(section.moreEl, section.container),
+    entryEl: section.entry,
+    insertMarker: topLevelWrapper(section.entry, section.container),
     orgs: extra,
     injected: [],
     expanded: false,
-    onMoreClick: null,
+    onEntryClick: null,
   }
-  bindMoreInteraction(state)
+  bindEntryInteraction(state)
   enhancedUsername = username
-  // 默认展开：数据到手后立即注入全部隐藏组织，无需点击 "+N more"
   expand(state)
 }
 
@@ -518,7 +530,16 @@ observer.observe(document.body, { childList: true, subtree: true })
 
 // GitHub 软导航事件（多事件并听，运行时探测可用者）+ 浏览器历史导航兜底
 const onNavigate = (): void => {
+  const currentUsername = getProfileUsername()
+  const samePage = currentUsername !== null
+    && (currentUsername === enhancedUsername || currentUsername === panelWaitUsername)
   teardown()
+  if (!samePage) {
+    // 跨页导航：旧页面的劫持数据与等待态一并作废；
+    // 同页软导航噪音（用户名未变）则全部保留，避免反复重置等待态
+    dropPanelOptions()
+    panelWaitUsername = null
+  }
   scheduleScan()
 }
 const navEvents = ['turbo:load', 'soft-nav:end', 'pjax:end', 'popstate'] as const
