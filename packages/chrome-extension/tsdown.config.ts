@@ -1,8 +1,10 @@
 import { defineConfig } from 'tsdown'
 
-// content script 与 background 各自独立构建：
-// iife 不支持多入口（rolldown 限制），故拆成两组单入口配置。
-// 完全控制输出文件名（默认 iife 格式会插入 .iife 中缀），与 manifest.json 引用保持一致。
+// Build the content script, background service worker, and MAIN-world script
+// independently. Rolldown does not support multiple entry points for IIFEs, so
+// use separate single-entry configurations. Explicitly control output names
+// because the default IIFE format inserts an .iife infix; the generated names
+// must match the references in manifest.json.
 const shared = {
   outDir: 'dist',
   format: 'iife',

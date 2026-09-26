@@ -1,23 +1,27 @@
 /**
- * MAIN world 注入脚本（document_start，先于页面脚本注册补丁）。
+ * MAIN-world injection script. It runs at document_start and installs the patch
+ * before page scripts execute.
  *
- * GitHub 登录态会在浏览用户主页时请求右侧面板数据 "/_side-panels/user.json"，
- * 响应中 userStatus.organizationOptions 携带该用户的完整组织列表。
- * 匿名访问时 GitHub 不发起该请求，因此以此作为登录场景的数据源。
+ * When a signed-in user visits a profile, GitHub requests side-panel data from
+ * "/_side-panels/user.json". The response's userStatus.organizationOptions
+ * contains the profile user's complete organization list. GitHub does not make
+ * this request for anonymous visitors, so it serves as the signed-in data source.
  *
- * 职责：
- * 1. patch window.fetch 拦截该响应（clone 后读取，不影响页面自身消费），
- *    缓存最近一份数据并 postMessage 转发给 isolated world 的 content script；
- * 2. 该请求可能早于 content script 注入（页面加载早期），转发无人接收会丢，
- *    因此同时缓存数据 —— content script 就绪后会发 "guo:panel-request" 消息，
- *    这里把缓存回放给它，保证"页面一访问就劫持到的数据"绝不丢失。
+ * Responsibilities:
+ * 1. Patch window.fetch to intercept the response. Read from a clone so the
+ *    page can consume the original response, cache the latest data, and forward
+ *    it to the isolated-world content script via postMessage.
+ * 2. The request may finish early in page loading, before the content script is
+ *    injected, so an initial postMessage could have no listener. Cache the data
+ *    and replay it when the content script sends a "guo:panel-request" message,
+ *    ensuring that data intercepted as soon as the page loads is never lost.
  */
 
 const PANEL_URL_RE = /\/_side-panels\/user\.json(?:[?#]|$)/
 const PANEL_MESSAGE_TYPE = 'guo:side-panel'
 const PANEL_REQUEST_TYPE = 'guo:panel-request'
 
-/** 最近一次劫持到的 side-panel JSON（回放用） */
+/** Most recently intercepted side-panel JSON, retained for replay. */
 let lastPanelData: object | false = false
 
 const originalFetch = window.fetch.bind(window)
@@ -48,7 +52,8 @@ window.fetch = (...args: Parameters<typeof window.fetch>) => {
   return promise
 }
 
-// content script 就绪后主动索取回放（解决"劫持早于注入导致数据丢失"的时序问题）
+// Replay cached data when the content script is ready, avoiding a race where
+// interception happens before injection and the initial message is lost.
 window.addEventListener('message', (e) => {
   if (e.source !== window)
     return

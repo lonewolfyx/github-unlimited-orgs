@@ -1,12 +1,15 @@
 /**
- * MV3 service worker：代理组织数据请求。
+ * MV3 service worker that proxies organization data requests.
  *
- * MV3 中 content script 的 fetch 以页面源（https://github.com）发起、受 CORS 限制，
- * 而 background 携带 manifest 的 host_permissions 发起请求不受此限制，
- * 因此由这里统一转发到自建 API。
+ * In MV3, fetch requests from the content script use the page origin
+ * (https://github.com) and are subject to CORS restrictions. Requests from the
+ * background service worker use the manifest's host_permissions and are not
+ * subject to those restrictions, so organization requests are forwarded to the
+ * custom API here.
  */
 
-// TODO(M4): 生产部署后替换为正式 API 域名，并通过 chrome.storage.sync 支持覆盖
+// TODO(M4): Replace this with the production API domain after deployment and
+// allow it to be overridden through chrome.storage.sync.
 const API_BASE = 'http://localhost:3000'
 const API_TIMEOUT_MS = 10_000
 
@@ -31,20 +34,20 @@ chrome.runtime.onMessage.addListener((message: FetchOrgsMessage, _sender, sendRe
       if (!res.ok) {
         sendResponse({
           ok: false,
-          error: `API 请求失败：HTTP ${res.status}`,
+          error: `API request failed: HTTP ${res.status}`,
         } satisfies FetchResponse)
         return
       }
       const data = await res.json() as object[]
       if (!Array.isArray(data)) {
-        sendResponse({ ok: false, error: 'API 响应格式异常' } satisfies FetchResponse)
+        sendResponse({ ok: false, error: 'Unexpected API response format' } satisfies FetchResponse)
         return
       }
       sendResponse({ ok: true, data } satisfies FetchResponse)
     })
     .catch(() => {
-      sendResponse({ ok: false, error: 'API 请求失败' } satisfies FetchResponse)
+      sendResponse({ ok: false, error: 'API request failed' } satisfies FetchResponse)
     })
 
-  return true // 保持消息通道开启以支持异步 sendResponse
+  return true // Keep the message channel open for the asynchronous sendResponse call.
 })
