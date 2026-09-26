@@ -3,7 +3,7 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "build": "tsdown && cp src/manifest.json dist/manifest.json && cp src/options.html dist/options.html",
+    "build": "tsdown && cp src/manifest.json dist/manifest.json",
     "dev": "tsdown --watch"
   },
   "devDependencies": {

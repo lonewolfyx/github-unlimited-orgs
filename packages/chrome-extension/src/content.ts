@@ -209,6 +209,13 @@ let panelPageUsername: string | null = null
 /** 首次进入等待流程的时间戳，用于超时放弃 */
 let panelWaitStart = 0
 
+// ---------------------------------------------------------------------------
+// 注入状态（声明在消息监听之前，供其引用）
+// ---------------------------------------------------------------------------
+
+let state: InjectedState | null = null
+let enhancedUsername: string | null = null
+
 window.addEventListener('message', (e) => {
   if (e.source !== window || (e.data as { type?: string } | null)?.type !== PANEL_MESSAGE_TYPE)
     return
@@ -322,9 +329,6 @@ interface InjectedState {
   onEntryClick: ((e: MouseEvent) => void) | null
 }
 
-let state: InjectedState | null = null
-let enhancedUsername: string | null = null
-
 function expand(s: InjectedState): void {
   if (s.expanded)
     return
@@ -409,8 +413,9 @@ async function scan(): Promise<void> {
   // 若页面重渲染撕掉了注入头像（容器还在），守卫失效以触发自愈重注入
   if (username && username === enhancedUsername && state
     && state.injected.length > 0 && state.injected.every(a => a.isConnected)
-    && !latestPanelOptions)
+    && !latestPanelOptions) {
     return
+  }
   // 守卫 2：self 页面已进入等待态，劫持数据到达前无需重扫（消息到达会主动触发）
   if (username && username === panelWaitUsername && !latestPanelOptions && !state)
     return
