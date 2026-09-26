@@ -12,11 +12,17 @@
  *   动态插入且带该属性的元素会自动获得原生 hovercard，无需自己实现卡片。
  *
  * 因此本脚本只做三件事：
- * 1. 定位 Organizations 区块与 "+N more" 元素；
- * 2. 通过 background service worker 调用自建 API 拿到全部公开组织，
- *    过滤掉页面已展示的，得到隐藏组织列表；
- * 3. 点击 "+N more" 时按 GitHub 原生 DOM 结构注入隐藏组织头像
- *    （自带 data-hovercard-url，悬停事件由 GitHub 自己的 JS 处理）。
+ * 1. 定位 Organizations 区块与展开入口（"+N more" 文本，或登录用户看自己主页时的
+ *    "View all" 链接）；
+ * 2. 拿到该用户全部组织列表（两条数据通道，见下）；
+ * 3. 按GitHub 原生 DOM 结构注入隐藏组织头像
+ *    （自带 data-hovercard-url，悬停事件由 GitHub 自己的 JS 处理），默认展开。
+ *
+ * 数据通道（按优先级）：
+ * - 登录态：劫持 GitHub 自己的右侧面板请求 `/_side-panels/user.json`
+ *   （见 main-world.ts），其 userStatus.organizationOptions 携带完整组织列表，
+ *   不再调用自建 API；
+ * - 匿名态：GitHub 不会发起该请求，回落到自建 API（经 background 代理）。
  */
 
 interface OrgInfo {
@@ -28,11 +34,26 @@ interface OrgInfo {
   join_time?: string
 }
 
+/** /_side-panels/user.json 响应中与本扩展相关的部分 */
+interface SidePanelData {
+  userStatus?: {
+    organizationOptions?: Array<{
+      label: string
+      value: number
+      globalRelayId: string
+    }>
+  }
+}
+
 // TODO(M4): 生产部署后替换为正式 API 域名
 const CACHE_PREFIX = 'guo:orgs:'
 const CACHE_TTL_MS = 30 * 60 * 1000
 const RESCAN_DEBOUNCE_MS = 300
 const FETCH_FAILURE_COOLDOWN_MS = 60_000
+const PANEL_URL_RE = /\/_side-panels\/user\.json(?:[?#]|$)/
+const PANEL_MESSAGE_TYPE = 'guo:side-panel'
+/** 登录态下等待 GitHub 发起 side-panel 请求的最长时间，超时回落自建 API */
+const PANEL_WAIT_MS = 8_000
 
 // ---------------------------------------------------------------------------
 // 用户名解析
@@ -104,7 +125,7 @@ function resolveContainer(node: Element): HTMLElement | null {
   return null
 }
 
-/** 在容器内寻找文本为 "+N more" 的最内层元素 */
+/** 在容器内寻找展开入口："+N more" 文本元素，或 "View all" 链接（登录用户看自己主页时） */
 function findMoreElement(container: HTMLElement): HTMLElement | null {
   for (const el of container.querySelectorAll<HTMLElement>('*')) {
     if (el.children.length > 0)
@@ -112,7 +133,9 @@ function findMoreElement(container: HTMLElement): HTMLElement | null {
     if (MORE_TEXT_RE.test(el.textContent?.trim() ?? ''))
       return el
   }
-  return null
+  // 登录用户访问自己主页时不显示 "+N more"，而是：
+  // <div class="mt-2 tmp-mt-2"><a href="/settings/organizations" class="Link">View all</a></div>
+  return container.querySelector<HTMLElement>('a[href="/settings/organizations"]')
 }
 
 function findOrgSection(): OrgSection | null {
@@ -337,6 +360,42 @@ function teardown(): void {
 }
 
 // ---------------------------------------------------------------------------
+// side-panel 数据通道（登录态）：接收 main-world.ts 转发的 _side-panels/user.json
+// ---------------------------------------------------------------------------
+
+/** 最近一次劫持到的 side-panel 数据（消费后置空，避免串页复用） */
+let latestPanelOptions: Array<{ label: string, value: number }> | null = null
+/** 首次进入登录态等待流程的时间戳，用于超时回落 */
+let panelWaitStart = 0
+
+window.addEventListener('message', (e) => {
+  if (e.source !== window || (e.data as { type?: string } | null)?.type !== PANEL_MESSAGE_TYPE)
+    return
+  const data = (e.data as { data?: SidePanelData }).data
+  const options = data?.userStatus?.organizationOptions
+  if (!Array.isArray(options))
+    return
+  latestPanelOptions = options.map(o => ({ label: o.label, value: o.value }))
+  log(`劫持 side-panel 响应：${latestPanelOptions.length} 个组织`)
+  // 请求晚于 scan 时由此触发下一轮扫描
+  scheduleScan()
+})
+
+/** 是否登录态（GitHub 页面内嵌的 user-login meta） */
+function isLoggedIn(): boolean {
+  return !!document.querySelector<HTMLMetaElement>('meta[name="user-login"]')?.content
+}
+
+/** organizationOptions → OrgInfo[]：value 即组织数据库 ID，可直接拼头像；label 即 login */
+function orgsFromPanel(options: Array<{ label: string, value: number }>): OrgInfo[] {
+  return options.map(o => ({
+    username: o.label,
+    lable: o.label,
+    avatar: `https://avatars.githubusercontent.com/u/${o.value}?s=64&v=4`,
+  }))
+}
+
+// ---------------------------------------------------------------------------
 // 扫描调度：首次执行 + MutationObserver 自愈 + GitHub 软导航兜底
 // ---------------------------------------------------------------------------
 
@@ -349,11 +408,13 @@ async function scan(): Promise<void> {
   const token = ++scanToken
   const username = getProfileUsername()
 
-  // 同一主页且注入仍然存活时跳过（自身注入触发的 MutationObserver 会再次进入这里）
-  if (username && username === enhancedUsername && state?.container.isConnected)
+  // 同一主页且注入仍然存活时跳过（自身注入触发的 MutationObserver 会再次进入这里）；
+  // 但刚劫持到 side-panel 数据时必须重扫，用完整数据刷新已有注入
+  if (username && username === enhancedUsername && state?.container.isConnected && !latestPanelOptions)
     return
 
   teardown()
+  panelWaitStart = 0
   if (!username) {
     log('非用户主页，跳过')
     return
@@ -366,33 +427,67 @@ async function scan(): Promise<void> {
     return
   }
   if (!section.moreEl) {
-    log('找到区块但没有 "+N more"，视为已展示全部组织')
+    log('找到区块但没有 "+N more" / "View all" 入口，视为已展示全部组织')
     return
   }
 
-  let orgs = orgCache.get(username)
-  if (!orgs) {
-    if ((failedUntil.get(username) ?? 0) > Date.now()) {
-      log('API 失败冷却期内，本轮跳过')
-      return
-    }
-    try {
-      orgs = await fetchOrgs(username)
+  let orgs: OrgInfo[] | undefined
+
+  if (isLoggedIn()) {
+    // 通道 1（登录态）：side-panel 数据是唯一真相源。
+    // 不读自建 API 的 sessionStorage/内存缓存 —— 那份列表不完整（如 15 vs 79）。
+    if (latestPanelOptions) {
+      orgs = orgsFromPanel(latestPanelOptions)
+      latestPanelOptions = null
       orgCache.set(username, orgs)
+      log(`side-panel 通道：${orgs.length} 个组织`)
     }
-    catch {
-      // 静默降级：保留原生 "+N more"，冷却期内不再重试
-      failedUntil.set(username, Date.now() + FETCH_FAILURE_COOLDOWN_MS)
-      return
+    else if (!panelWaitStart) {
+      panelWaitStart = Date.now()
+    }
+    else if (Date.now() - panelWaitStart < PANEL_WAIT_MS) {
+      log('等待 GitHub side-panel 请求…')
+      return // 消息到达后 scheduleScan 会再次进入
+    }
+    else {
+      log(`side-panel 等待超时（${PANEL_WAIT_MS}ms），回落自建 API`)
+      try {
+        orgs = await fetchOrgs(username)
+      }
+      catch {
+        failedUntil.set(username, Date.now() + FETCH_FAILURE_COOLDOWN_MS)
+        return
+      }
+    }
+  }
+  else {
+    // 通道 2（匿名态）：自建 API（含 sessionStorage 缓存）
+    orgs = orgCache.get(username)
+    if (!orgs) {
+      if ((failedUntil.get(username) ?? 0) > Date.now()) {
+        log('API 失败冷却期内，本轮跳过')
+        return
+      }
+      try {
+        orgs = await fetchOrgs(username)
+        orgCache.set(username, orgs)
+      }
+      catch {
+        // 静默降级：保留原生 "+N more"，冷却期内不再重试
+        failedUntil.set(username, Date.now() + FETCH_FAILURE_COOLDOWN_MS)
+        return
+      }
     }
   }
   if (token !== scanToken)
     return // 扫描期间发生了导航，丢弃本次结果
+  if (!orgs)
+    return // 两条通道都未产出数据（理论上不可达）
 
   const shown = existingLogins(section.container)
   const extra = orgs.filter(o => !shown.has(o.username.toLowerCase()))
   if (extra.length === 0) {
-    log(`API 返回 ${orgs.length} 个组织，页面已全部展示`)
+    log(`共 ${orgs.length} 个组织，页面已全部展示`)
     return
   }
 
