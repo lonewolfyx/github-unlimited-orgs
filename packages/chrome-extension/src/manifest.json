@@ -6,6 +6,12 @@
   "content_scripts": [
     {
       "matches": ["https://github.com/*"],
+      "js": ["main-world.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["https://github.com/*"],
       "js": ["content.js"],
       "run_at": "document_idle"
     }

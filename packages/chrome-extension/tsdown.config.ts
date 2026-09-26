@@ -15,4 +15,5 @@ const shared = {
 export default defineConfig([
   { ...shared, entry: ['src/content.ts'], clean: true },
   { ...shared, entry: ['src/background.ts'], clean: false },
+  { ...shared, entry: ['src/main-world.ts'], clean: false },
 ])
