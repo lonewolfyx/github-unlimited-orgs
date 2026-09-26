@@ -1,78 +1,90 @@
-/**
- * GitHub Unlimited Orgs — content script（子项目独立实现，不依赖 workspace 其他包）
- *
- * 页面分类（本次需求的核心判定，封装在 findOrgSection/findEntry 中）：
- * - self  ：登录用户访问自身主页。特征是组织区块尾部出现 "View all" 链接
- *   （href=/settings/organizations）。组织数据来自劫持的 GitHub 自有接口
- *   /_side-panels/user.json（见 main-world.ts），不调用自建 API。
- * - other ：三方用户页面。特征是组织区块尾部出现 "+N more" 文本。
- *   组织数据来自自建 API（实时请求，不做任何缓存）。
- * - none  ：两种入口都不存在（页面已展示全部组织），不做任何事。
- *
- * 劫持驱动时机：main-world.js 以 MAIN world + document_start 注入，
- * 在页面开始加载时就 patch 好 fetch，保证 GitHub 首次发出 side-panel
- * 请求时即可拦截到响应（postMessage 转发给本脚本）。
- *
- * 注入规则：先过滤掉页面已展示的组织，再按 GitHub 原生 DOM 结构注入
- * 剩余组织头像 —— 携带 data-hovercard-url，悬停卡片由 GitHub 原生事件
- * 委托处理（本脚本不绑定任何 hover 事件、不实现卡片）；头像之间补
- * 空白文本节点以保持原生 inline-block 间距；注入后自动展开并隐藏入口。
- */
-
 interface OrgInfo {
   username: string
   lable: string
   avatar: string
-  description?: string
-  html_url?: string
-  join_time?: string
 }
 
-/** /_side-panels/user.json 响应中与本扩展相关的部分 */
 interface SidePanelData {
-  userStatus?: {
-    organizationOptions?: Array<{
+  userStatus: {
+    organizationOptions: Array<{
       label: string
       value: number
-      globalRelayId: string
     }>
   }
 }
 
-const RESCAN_DEBOUNCE_MS = 300
-/** 三方页面 API 失败后的内存级冷却（防 MutationObserver 反复触发打爆接口） */
-const FETCH_FAILURE_COOLDOWN_MS = 60_000
+interface ProfileRoute {
+  key: string
+  username: string
+}
+
+type EntryKind = 'self' | 'other'
+
+interface OrgSection {
+  container: HTMLElement
+  entry: HTMLElement
+  kind: EntryKind
+}
+
+interface InjectedState {
+  container: HTMLElement
+  entry: HTMLElement
+  insertedNodes: ChildNode[]
+  previousEntryDisplay: string
+}
+
+interface InjectionResult {
+  shown: number
+  injected: number
+}
+
+interface DiagnosticSummary {
+  status: string
+  source: string
+  total: number
+  shown: number
+  injected: number
+  detail: string
+}
+
+type FetchOrgsResponse
+  = | { ok: true, data: OrgInfo[] }
+    | { ok: false, error: string }
+
+interface PanelMessage {
+  type: string
+  data: SidePanelData
+}
+
 const PANEL_MESSAGE_TYPE = 'guo:side-panel'
 const PANEL_REQUEST_TYPE = 'guo:panel-request'
-/** 自身页面等待劫持数据到达的最长时间，超时放弃（不回落自建 API） */
+const FETCH_ORGS_MESSAGE_TYPE = 'guo:fetch-orgs'
+const FETCH_FAILURE_COOLDOWN_MS = 60_000
 const PANEL_WAIT_MS = 8_000
+const SECTION_DISCOVERY_WINDOW_MS = 12_000
+const SCAN_DEBOUNCE_MS = 80
+const MORE_TEXT_RE = /^\+\s*\d+\s+more$/u
+const ORG_HINT_SELECTOR = 'a[href$="?tab=organizations"], a[href="/settings/organizations"], h2, h3'
+const LOG_STYLE = 'color:#0969da;font-weight:600'
 
-// ---------------------------------------------------------------------------
-// 诊断日志：DevTools Console 按 [GUO] 过滤
-// ---------------------------------------------------------------------------
-
-const log = (...args: unknown[]): void => console.info('%c[GUO]', 'color:#0969da;font-weight:bold', ...args)
-
-declare const __GUO_BUILD__: string
-log(`content script 已加载（build ${__GUO_BUILD__}）`)
-
-// ---------------------------------------------------------------------------
-// 用户名解析
-// ---------------------------------------------------------------------------
-
-/** GitHub 一级路径中的保留前缀，命中则说明当前不在用户/组织主页 */
+/** GitHub 的单段顶级路由；这些路径不能当作用户或组织名。 */
 const RESERVED_PATHS = new Set([
   'about',
   'account',
   'apps',
   'collections',
+  'contact',
+  'copilot',
   'codespaces',
   'customer-stories',
   'dashboard',
+  'education',
   'enterprise',
+  'events',
   'explore',
   'features',
   'feed',
+  'gist',
   'issues',
   'join',
   'login',
@@ -80,475 +92,537 @@ const RESERVED_PATHS = new Set([
   'marketplace',
   'new',
   'notifications',
+  'organizations',
   'orgs',
   'pricing',
   'pulls',
   'readme',
   'search',
   'security',
+  'sessions',
   'settings',
   'site',
+  'solutions',
   'sponsors',
+  'stars',
+  'team',
   'topics',
   'trending',
+  'users',
   'watching',
 ])
 
-function getProfileUsername(pathname: string = location.pathname): string | null {
-  const first = pathname.split('/').filter(Boolean)[0]
-  if (!first || RESERVED_PATHS.has(first.toLowerCase()))
-    return null
-  return decodeURIComponent(first)
+function getProfileRoute(): ProfileRoute | false {
+  const segments = location.pathname.split('/').filter(Boolean)
+  if (segments.length !== 1)
+    return false
+
+  try {
+    const username = decodeURIComponent(segments.join(''))
+    if (!username || RESERVED_PATHS.has(username.toLowerCase()))
+      return false
+    return {
+      key: `${location.pathname}${location.search}`,
+      username,
+    }
+  }
+  catch {
+    return false
+  }
 }
 
-// ---------------------------------------------------------------------------
-// Organizations 区块发现（所有与 GitHub DOM 耦合的代码集中在此）
-// ---------------------------------------------------------------------------
-
-/** "+N more" 文案（兼容本地化空白差异，不匹配具体语言） */
-const MORE_TEXT_RE = /^\+\s*\d+\s+more$/u
-
-/** 展开入口类型：self = View all（登录用户自身页面）；other = +N more（三方用户页面） */
-type EntryKind = 'self' | 'other'
-
-interface OrgSection {
-  /** 包含原生组织头像与展开入口的容器元素 */
-  container: HTMLElement
-  /** 入口元素（"View all" 链接或 "+N more" 文本） */
-  entry: HTMLElement
-  kind: EntryKind
-}
-
-/** 从锚点/标题向上寻找包含组织头像（img）的最近祖先作为区块容器 */
-function resolveContainer(node: Element): HTMLElement | null {
-  let current: HTMLElement | null = node.parentElement
+function resolveContainer(node: Element): HTMLElement | false {
+  let current = node.parentElement
   for (let depth = 0; current && depth < 6; depth++) {
     if (current.querySelector('img'))
       return current
     current = current.parentElement
   }
-  return null
+  return false
 }
 
-/**
- * 识别组织区块的展开入口（页面分类的核心判定）：
- * - "+N more" 最内层文本元素 → other（三方用户页面）
- * - "View all" 链接（登录用户看自己主页时才有）→ self
- */
-function findEntry(container: HTMLElement): { el: HTMLElement, kind: EntryKind } | null {
-  for (const el of container.querySelectorAll<HTMLElement>('*')) {
-    if (el.children.length > 0)
-      continue
-    if (MORE_TEXT_RE.test(el.textContent?.trim() ?? ''))
-      return { el, kind: 'other' }
-  }
+function findEntry(container: HTMLElement): { element: HTMLElement, kind: EntryKind } | false {
   const viewAll = container.querySelector<HTMLElement>('a[href="/settings/organizations"]')
   if (viewAll)
-    return { el: viewAll, kind: 'self' }
-  return null
+    return { element: viewAll, kind: 'self' }
+
+  for (const link of container.querySelectorAll<HTMLAnchorElement>('a[href$="?tab=organizations"]')) {
+    if (MORE_TEXT_RE.test(link.textContent?.trim() ?? ''))
+      return { element: link, kind: 'other' }
+  }
+
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_ELEMENT)
+  let element = walker.nextNode()
+  while (element) {
+    if (element instanceof HTMLElement
+      && element.childElementCount === 0
+      && MORE_TEXT_RE.test(element.textContent?.trim() ?? '')) {
+      return { element, kind: 'other' }
+    }
+    element = walker.nextNode()
+  }
+  return false
 }
 
-function findOrgSection(): OrgSection | null {
-  // 策略 1："+N more" 链接（部分登录态下 href 以 ?tab=organizations 结尾）
+function findOrgSection(): OrgSection | false {
   for (const link of document.querySelectorAll<HTMLAnchorElement>('a[href$="?tab=organizations"]')) {
-    if (MORE_TEXT_RE.test(link.textContent?.trim() ?? '')) {
-      const container = resolveContainer(link)
-      if (container)
-        return { container, entry: link, kind: 'other' }
-    }
+    if (!MORE_TEXT_RE.test(link.textContent?.trim() ?? ''))
+      continue
+    const container = resolveContainer(link)
+    if (container)
+      return { container, entry: link, kind: 'other' }
   }
 
-  // 策略 2：真实 DOM 的 <h2>Organizations</h2>（匿名态与新版页面均无 tab 链接）
   for (const heading of document.querySelectorAll<HTMLElement>('h2, h3')) {
-    if ((heading.textContent?.trim() ?? '') === 'Organizations') {
-      const container = resolveContainer(heading)
-      if (container) {
-        const entry = findEntry(container)
-        if (entry)
-          return { container, entry: entry.el, kind: entry.kind }
-      }
-    }
+    if (heading.textContent?.trim() !== 'Organizations')
+      continue
+    const container = resolveContainer(heading)
+    if (!container)
+      continue
+    const entry = findEntry(container)
+    if (entry)
+      return { container, entry: entry.element, kind: entry.kind }
   }
-
-  return null
+  return false
 }
 
-/** 从站内单段路径链接（如 /{org}）解析 login */
-function loginFromHref(href: string): string | null {
+function loginFromHref(href: string): string | false {
   try {
     const url = new URL(href, location.origin)
-    if (url.origin !== location.origin)
-      return null
-    const [first] = url.pathname.split('/').filter(Boolean)
-    return first ? decodeURIComponent(first) : null
+    const segments = url.pathname.split('/').filter(Boolean)
+    if (url.origin !== location.origin || segments.length !== 1)
+      return false
+    return decodeURIComponent(segments.join(''))
   }
   catch {
-    return null
+    return false
   }
 }
 
-/** 容器内已展示的组织 login 集合（注入前过滤用） */
 function existingLogins(container: HTMLElement): Set<string> {
-  const set = new Set<string>()
-  for (const a of container.querySelectorAll<HTMLAnchorElement>('a.avatar-group-item[href]')) {
-    const login = loginFromHref(a.getAttribute('href') ?? '')
+  const logins = new Set<string>()
+  for (const link of container.querySelectorAll<HTMLAnchorElement>('a.avatar-group-item[href]')) {
+    const login = loginFromHref(link.getAttribute('href') ?? '')
     if (login)
-      set.add(login.toLowerCase())
+      logins.add(login.toLowerCase())
   }
-  return set
+  return logins
 }
 
-// ---------------------------------------------------------------------------
-// 数据通道 A（self 页面）：劫持的 side-panel 数据
-// ---------------------------------------------------------------------------
-
-/** 最近一次劫持到的 organizationOptions（消费后置空，避免串页复用） */
-let latestPanelOptions: Array<{ label: string, value: number }> | null = null
-/** 劫持数据所属的页面用户名（消费前校验，防止跨页串数据） */
-let panelPageUsername: string | null = null
-/** 首次进入等待流程的时间戳，用于超时放弃 */
-let panelWaitStart = 0
-
-// ---------------------------------------------------------------------------
-// 注入状态（声明在消息监听之前，供其引用）
-// ---------------------------------------------------------------------------
-
-let state: InjectedState | null = null
-let enhancedUsername: string | null = null
-
-window.addEventListener('message', (e) => {
-  if (e.source !== window || (e.data as { type?: string } | null)?.type !== PANEL_MESSAGE_TYPE)
-    return
-  // 已注入（或正在处理）时忽略重复响应，避免 GitHub 重发导致反复重建
-  if (state)
-    return
-  // 劫持数据只对自身页面（View all 入口）有意义：
-  // 三方页面（+N more）走自建 API，忽略 panel 响应，不让它触发重扫
-  const section = findOrgSection()
-  if (!section || section.kind !== 'self')
-    return
-  const data = (e.data as { data?: SidePanelData }).data
-  const options = data?.userStatus?.organizationOptions
-  if (!Array.isArray(options))
-    return
-  latestPanelOptions = options.map(o => ({ label: o.label, value: o.value }))
-  panelPageUsername = getProfileUsername()
-  log(`劫持 side-panel 响应：${latestPanelOptions.length} 个组织`)
-  // 请求晚于 scan 时由此触发下一轮扫描
-  scheduleScan()
-})
-
-/** 丢弃当前持有的 side-panel 数据：跨页导航后旧数据已无效，非 self 页面也不应消费 */
-function dropPanelOptions(): void {
-  latestPanelOptions = null
-}
-
-/** organizationOptions → OrgInfo[]：label 即 login，value 即组织数据库 ID（可拼头像） */
 function orgsFromPanel(options: Array<{ label: string, value: number }>): OrgInfo[] {
-  return options.map(o => ({
-    username: o.label,
-    lable: o.label,
-    avatar: `https://avatars.githubusercontent.com/u/${o.value}?s=64&v=4`,
-  }))
+  return options
+    .filter(option => option.label.length > 0 && Number.isSafeInteger(option.value) && option.value > 0)
+    .map(option => ({
+      username: option.label,
+      lable: option.label,
+      avatar: `https://avatars.githubusercontent.com/u/${option.value}?s=64&v=4`,
+    }))
 }
 
-// ---------------------------------------------------------------------------
-// 数据通道 B（other 页面）：自建 API，实时请求、不缓存。
-// content script 的 fetch 以 github.com 源发起、受 CORS 限制，
-// 实际请求由 background service worker 代理（见 background.ts）
-// ---------------------------------------------------------------------------
+function isOrgInfo(value: OrgInfo): boolean {
+  return typeof value === 'object'
+    && value.username.length > 0
+    && value.avatar.length > 0
+}
 
-/** 进行中的 API 请求（同用户并发 scan 共享同一 Promise，避免重复请求） */
-let inflight: { username: string, promise: Promise<OrgInfo[]> } | null = null
+let inflight: { username: string, promise: Promise<FetchOrgsResponse> } | false = false
 
-function fetchOrgs(username: string): Promise<OrgInfo[]> {
-  if (inflight?.username === username)
+function fetchOrgs(username: string): Promise<FetchOrgsResponse> {
+  if (inflight && inflight.username === username)
     return inflight.promise
 
-  const promise = (async () => {
-    const res = await chrome.runtime.sendMessage({ type: 'guo:fetch-orgs', username })
-    if (!res?.ok)
-      throw new Error(res?.error ?? 'background 未响应（扩展可能刚重载，请刷新页面）')
-    const data = res.data as OrgInfo[]
-    if (!Array.isArray(data))
-      throw new Error('API 响应格式异常')
-    return data
+  const promise = (async (): Promise<FetchOrgsResponse> => {
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: FETCH_ORGS_MESSAGE_TYPE,
+        username,
+      }) as FetchOrgsResponse
+      if (!response.ok)
+        return response
+      return { ok: true, data: response.data.filter(isOrgInfo) }
+    }
+    catch {
+      return { ok: false, error: '扩展后台未响应' }
+    }
   })()
 
   inflight = { username, promise }
-  void promise.finally(() => {
-    if (inflight?.promise === promise)
-      inflight = null
-  })
+  const clearInflight = (): void => {
+    if (inflight && inflight.promise === promise)
+      inflight = false
+  }
+  void promise.then(clearInflight, clearInflight)
   return promise
 }
 
-// ---------------------------------------------------------------------------
-// 注入：按 GitHub 原生 DOM 结构构造头像链接，悬停完全交给原生 hovercard
-// ---------------------------------------------------------------------------
+function avatarUrl(source: string): string {
+  try {
+    const url = new URL(source)
+    url.searchParams.set('s', '64')
+    return url.href
+  }
+  catch {
+    return source
+  }
+}
 
-/** 复刻原生 a.avatar-group-item 结构，data-hovercard-url 是原生悬停卡片的入口 */
 function createOrgLink(org: OrgInfo): HTMLAnchorElement {
-  const login = org.username
-  const a = document.createElement('a')
-  a.className = 'avatar-group-item'
-  a.href = `/${login}`
-  a.setAttribute('aria-label', org.lable || login)
-  a.setAttribute('itemprop', 'follows')
-  a.setAttribute('data-hovercard-type', 'organization')
-  a.setAttribute('data-hovercard-url', `/orgs/${login}/hovercard`)
-  a.setAttribute('data-octo-click', 'hovercard-link-click')
-  a.setAttribute('data-octo-dimensions', 'link_type:self')
+  const link = document.createElement('a')
+  link.className = 'avatar-group-item'
+  link.href = `/${encodeURIComponent(org.username)}`
+  link.setAttribute('aria-label', org.lable || org.username)
+  link.setAttribute('itemprop', 'follows')
+  link.setAttribute('data-hovercard-type', 'organization')
+  link.setAttribute('data-hovercard-url', `/orgs/${encodeURIComponent(org.username)}/hovercard`)
+  link.setAttribute('data-octo-click', 'hovercard-link-click')
+  link.setAttribute('data-octo-dimensions', 'link_type:self')
 
-  const img = document.createElement('img')
-  img.className = 'avatar'
-  img.alt = `@${login}`
-  img.width = 32
-  img.height = 32
-  img.setAttribute('size', '32')
-  img.src = org.avatar.includes('?') ? `${org.avatar}&s=64` : `${org.avatar}?s=64`
-  a.append(img)
-  return a
+  const image = document.createElement('img')
+  image.className = 'avatar'
+  image.alt = `@${org.username}`
+  image.width = 32
+  image.height = 32
+  image.loading = 'lazy'
+  image.decoding = 'async'
+  image.fetchPriority = 'low'
+  image.setAttribute('size', '32')
+  image.src = avatarUrl(org.avatar)
+  link.append(image)
+  return link
 }
 
-/** 入口元素在 container 内的顶层包装（原生为一个 div），作为插入点 */
-function topLevelWrapper(el: HTMLElement, container: HTMLElement): Element {
-  let node: Element = el
-  while (node.parentElement && node.parentElement !== container)
-    node = node.parentElement
-  return node
+function topLevelWrapper(element: HTMLElement, container: HTMLElement): Element {
+  let wrapper: Element = element
+  while (wrapper.parentElement && wrapper.parentElement !== container)
+    wrapper = wrapper.parentElement
+  return wrapper
 }
 
-interface InjectedState {
-  container: HTMLElement
-  entryEl: HTMLElement
-  insertMarker: Element | null
-  orgs: OrgInfo[]
-  injected: HTMLAnchorElement[]
-  expanded: boolean
-  onEntryClick: ((e: MouseEvent) => void) | null
+let state: InjectedState | false = false
+
+function isStateAlive(value: InjectedState): boolean {
+  return value.container.isConnected
+    && value.entry.isConnected
+    && value.insertedNodes.length > 0
+    && value.insertedNodes.every(node => node.isConnected)
 }
 
-function expand(s: InjectedState): void {
-  if (s.expanded)
+function teardownInjection(): void {
+  if (!state)
     return
-  const frag = document.createDocumentFragment()
-  for (const org of s.orgs) {
-    const a = createOrgLink(org)
-    s.injected.push(a)
-    // 原生头像的水平间距靠元素间空白文本节点（inline-block 空格），必须一并补上
-    frag.append(a, ' ')
-  }
-  if (s.insertMarker)
-    s.container.insertBefore(frag, s.insertMarker)
-  else
-    s.container.append(frag)
-  s.entryEl.style.display = 'none'
-  s.expanded = true
-  log(`展开：注入 ${s.injected.length} 个头像`)
+  state.entry.style.display = state.previousEntryDisplay
+  for (const node of state.insertedNodes)
+    node.remove()
+  state = false
 }
 
-function collapse(s: InjectedState): void {
-  for (const a of s.injected)
-    a.remove()
-  s.injected = []
-  s.entryEl.style.display = ''
-  s.expanded = false
-}
-
-function bindEntryInteraction(s: InjectedState): void {
-  const el = s.entryEl
-  // 原生 span 无任何交互样式，补一个指针光标；a/button 本身可聚焦则不动
-  if (!(el instanceof HTMLAnchorElement) && !(el instanceof HTMLButtonElement))
-    el.style.cursor = 'pointer'
-
-  s.onEntryClick = (e) => {
-    if (e.defaultPrevented)
-      return
-    // 修饰键点击 a 时保留原生跳转
-    if (el instanceof HTMLAnchorElement && (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey))
-      return
-    e.preventDefault()
-    e.stopPropagation()
-    if (s.expanded)
-      collapse(s)
-    else
-      expand(s)
-  }
-  el.addEventListener('click', s.onEntryClick, true)
-}
-
-function teardown(): void {
-  if (state) {
-    try {
-      if (state.onEntryClick)
-        state.entryEl.removeEventListener('click', state.onEntryClick, true)
-      state.entryEl.style.display = ''
-      state.entryEl.style.cursor = ''
-      for (const a of state.injected)
-        a.remove()
-    }
-    catch {}
-  }
-  state = null
-  enhancedUsername = null
-}
-
-// ---------------------------------------------------------------------------
-// 扫描调度：首次执行 + MutationObserver 自愈 + GitHub 软导航兜底
-// ---------------------------------------------------------------------------
-
-let scanToken = 0
-let scanTimer: ReturnType<typeof setTimeout> | undefined
-const failedUntil = new Map<string, number>()
-/** self 页面进入等待态的用户名：等待期间 observer 触发的扫描直接跳过 */
-let panelWaitUsername: string | null = null
-/** 本次页面会话内最近一次 API 拉取结果（仅用于同页重渲染自愈，跨导航/刷新即失效） */
-let lastFetched: { username: string, orgs: OrgInfo[] } | null = null
-
-async function scan(): Promise<void> {
-  const username = getProfileUsername()
-
-  // 守卫 1：同一主页且注入仍然完整存活时跳过；
-  // 若页面重渲染撕掉了注入头像（容器还在），守卫失效以触发自愈重注入
-  if (username && username === enhancedUsername && state
-    && state.injected.length > 0 && state.injected.every(a => a.isConnected)
-    && !latestPanelOptions) {
-    return
-  }
-  // 守卫 2：self 页面已进入等待态，劫持数据到达前无需重扫（消息到达会主动触发）
-  if (username && username === panelWaitUsername && !latestPanelOptions && !state)
-    return
-  // 守卫 3：该页面的 API 请求正在飞行中，本轮 scan 等它返回后自然完成注入，无需并发重扫
-  if (username && inflight?.username === username && !latestPanelOptions)
-    return
-
-  // 通过守卫后才登记本轮 token：被守卫拦下的扫描不得使在飞结果失效
-  const token = ++scanToken
-
-  teardown()
-  panelWaitStart = 0
-  if (!username) {
-    log('非用户主页，跳过')
-    return
-  }
-  log(`扫描：${username}`)
-
-  const section = findOrgSection()
-  if (!section) {
-    log('未找到 Organizations 区块（页面结构可能变化，或当前页无组织）')
-    return
-  }
-
-  let orgs: OrgInfo[] | undefined
-
-  if (section.kind === 'self') {
-    // 自身登录页面：只消费劫持数据，不调用自建 API
-    if (latestPanelOptions && panelPageUsername === username) {
-      orgs = orgsFromPanel(latestPanelOptions)
-      latestPanelOptions = null
-      panelWaitUsername = null
-      log(`劫持数据通道：${orgs.length} 个组织`)
-    }
-    else if (!panelWaitStart) {
-      panelWaitStart = Date.now()
-      panelWaitUsername = username
-      // 主动向 main-world 索取回放：劫持可能发生在本脚本注入之前（页面加载早期）
-      window.postMessage({ type: PANEL_REQUEST_TYPE }, '*')
-      log('等待 GitHub side-panel 数据…')
-      return // 回放/新响应到达后 scheduleScan 会再次进入
-    }
-    else {
-      log(`等待超时（${PANEL_WAIT_MS}ms），放弃注入（自身页面不调用自建 API）`)
-      panelWaitUsername = null
-      return
-    }
-  }
-  else {
-    // 三方用户页面：实时调用自建 API（不缓存）。
-    // 例外：同一次页面会话内刚拉取过（GitHub 重渲染撕掉了注入需要自愈），
-    // 复用本次会话的数据直接重注入，不算缓存、跨导航/刷新后必然重新请求。
-    if (lastFetched && lastFetched.username === username) {
-      orgs = lastFetched.orgs
-      log(`复用本次会话数据：${orgs.length} 个组织`)
-    }
-    else {
-      // 手上若还持有别的页面劫持的 panel 数据，在这里一并丢弃，
-      // 否则它会一直让"已注入跳过"守卫失效，导致反复 teardown + 重复请求。
-      dropPanelOptions()
-      if ((failedUntil.get(username) ?? 0) > Date.now()) {
-        log('API 失败冷却期内，本轮跳过')
-        return
-      }
-      try {
-        orgs = await fetchOrgs(username)
-        lastFetched = { username, orgs }
-      }
-      catch (err) {
-        console.error('[GUO] API 失败：', err)
-        failedUntil.set(username, Date.now() + FETCH_FAILURE_COOLDOWN_MS)
-        return
-      }
-    }
-  }
-
-  if (token !== scanToken)
-    return // 扫描期间发生了导航，丢弃本次结果
-  if (!orgs)
-    return // 两条通道都未产出数据（理论上不可达）
-
-  // 结果日志在 token 校验之后打，保证即使并发 scan 共享了同一请求也只记录一次
-  if (section.kind === 'other')
-    log(`API 实时返回：${orgs.length} 个组织`)
-
-  // 过滤掉页面已展示的组织，只注入缺失部分
+function injectOrganizations(section: OrgSection, orgs: OrgInfo[]): InjectionResult {
   const shown = existingLogins(section.container)
-  const extra = orgs.filter(o => !shown.has(o.username.toLowerCase()))
-  if (extra.length === 0) {
-    log(`共 ${orgs.length} 个组织，页面已全部展示`)
-    return
+  const extra = orgs.filter(org => !shown.has(org.username.toLowerCase()))
+  if (extra.length === 0)
+    return { shown: shown.size, injected: 0 }
+
+  const fragment = document.createDocumentFragment()
+  const insertedNodes: ChildNode[] = []
+  for (const org of extra) {
+    const link = createOrgLink(org)
+    const spacer = document.createTextNode(' ')
+    fragment.append(link, spacer)
+    insertedNodes.push(link, spacer)
   }
 
+  const marker = topLevelWrapper(section.entry, section.container)
+  section.container.insertBefore(fragment, marker)
+  const previousEntryDisplay = section.entry.style.display
+  section.entry.style.display = 'none'
   state = {
     container: section.container,
-    entryEl: section.entry,
-    insertMarker: topLevelWrapper(section.entry, section.container),
-    orgs: extra,
-    injected: [],
-    expanded: false,
-    onEntryClick: null,
+    entry: section.entry,
+    insertedNodes,
+    previousEntryDisplay,
   }
-  bindEntryInteraction(state)
-  enhancedUsername = username
-  expand(state)
+  return { shown: shown.size, injected: extra.length }
 }
 
-function scheduleScan(): void {
+let activeRouteKey = ''
+let activeUsername = ''
+let currentSectionKind: EntryKind | '' = ''
+let latestPanelOptions: Array<{ label: string, value: number }> = []
+let hasLatestPanelOptions = false
+let panelPageUsername = ''
+let panelWaitUsername = ''
+let panelUnavailableRouteKey = ''
+let panelWaitTimer = 0
+let scanTimer = 0
+let discoveryTimer = 0
+let scanToken = 0
+let lastFetched: { routeKey: string, username: string, orgs: OrgInfo[] } | false = false
+let loggedRouteKey = ''
+let routeStartedAt = performance.now()
+const failedUntil = new Map<string, number>()
+
+function logDiagnostic(route: ProfileRoute, summary: DiagnosticSummary): void {
+  if (loggedRouteKey === route.key)
+    return
+
+  loggedRouteKey = route.key
+  console.groupCollapsed(`%c[GUO] ${route.username} · ${summary.status}`, LOG_STYLE)
+  console.info('页面', route.key)
+  console.info('数据源', summary.source)
+  console.info('组织', `获取 ${summary.total} / 已显示 ${summary.shown} / 新增 ${summary.injected}`)
+  if (summary.detail)
+    console.info('说明', summary.detail)
+  console.info('耗时', `${Math.round(performance.now() - routeStartedAt)}ms`)
+  console.groupEnd()
+}
+
+const domObserver = new MutationObserver((records) => {
+  if (!getProfileRoute())
+    return
+
+  if (state) {
+    if (!isStateAlive(state))
+      scheduleScan()
+    return
+  }
+  if (panelWaitUsername || (inflight && inflight.username === activeUsername))
+    return
+
+  for (const record of records) {
+    for (const node of record.addedNodes) {
+      if (node instanceof Element
+        && (node.matches(ORG_HINT_SELECTOR) || node.querySelector(ORG_HINT_SELECTOR))) {
+        scheduleScan()
+        return
+      }
+    }
+  }
+})
+
+function stopObservingDom(): void {
+  clearTimeout(discoveryTimer)
+  discoveryTimer = 0
+  domObserver.disconnect()
+}
+
+function observeForSection(route: ProfileRoute): void {
+  stopObservingDom()
+  domObserver.observe(document.body, { childList: true, subtree: true })
+  discoveryTimer = setTimeout(() => {
+    if (activeRouteKey === route.key && !state) {
+      domObserver.disconnect()
+      logDiagnostic(route, {
+        status: '未找到组织区块',
+        source: '无',
+        total: 0,
+        shown: 0,
+        injected: 0,
+        detail: '页面可能没有组织，或 GitHub 页面结构已变化',
+      })
+    }
+  }, SECTION_DISCOVERY_WINDOW_MS)
+}
+
+function observeInjectedState(injectedState: InjectedState): void {
+  stopObservingDom()
+  const root = injectedState.container.parentElement ?? injectedState.container
+  domObserver.observe(root, { childList: true, subtree: true })
+}
+
+function clearPanelWait(): void {
+  clearTimeout(panelWaitTimer)
+  panelWaitTimer = 0
+  panelWaitUsername = ''
+}
+
+function resetRouteState(route: ProfileRoute | false): void {
+  scanToken++
+  clearTimeout(scanTimer)
+  scanTimer = 0
+  stopObservingDom()
+  clearPanelWait()
+  teardownInjection()
+
+  activeRouteKey = route ? route.key : ''
+  activeUsername = route ? route.username : ''
+  currentSectionKind = ''
+  latestPanelOptions = []
+  hasLatestPanelOptions = false
+  panelPageUsername = ''
+  panelUnavailableRouteKey = ''
+  lastFetched = false
+  loggedRouteKey = ''
+  routeStartedAt = performance.now()
+}
+
+function syncRoute(): ProfileRoute | false {
+  const route = getProfileRoute()
+  if ((route ? route.key : '') !== activeRouteKey)
+    resetRouteState(route)
+  return route
+}
+
+function beginPanelWait(route: ProfileRoute): void {
+  if (panelWaitUsername === route.username || panelUnavailableRouteKey === route.key)
+    return
+
+  clearPanelWait()
+  panelWaitUsername = route.username
+  window.postMessage({ type: PANEL_REQUEST_TYPE }, location.origin)
+  panelWaitTimer = setTimeout(() => {
+    if (activeRouteKey !== route.key || panelWaitUsername !== route.username)
+      return
+    panelWaitUsername = ''
+    panelUnavailableRouteKey = route.key
+    logDiagnostic(route, {
+      status: '等待数据超时',
+      source: 'GitHub side-panel',
+      total: 0,
+      shown: 0,
+      injected: 0,
+      detail: `${PANEL_WAIT_MS}ms 内未收到组织数据`,
+    })
+  }, PANEL_WAIT_MS)
+}
+
+async function scan(): Promise<void> {
+  const route = syncRoute()
+  if (!route)
+    return
+  if (state && isStateAlive(state))
+    return
+  if (panelWaitUsername === route.username || (inflight && inflight.username === route.username))
+    return
+
+  const token = ++scanToken
+  teardownInjection()
+  stopObservingDom()
+
+  const section = findOrgSection()
+  currentSectionKind = section ? section.kind : ''
+  if (!section) {
+    observeForSection(route)
+    return
+  }
+
+  let orgs: OrgInfo[]
+  let source = '自建 API'
+  if (section.kind === 'self') {
+    source = 'GitHub side-panel'
+    if (hasLatestPanelOptions && panelPageUsername === route.username) {
+      orgs = orgsFromPanel(latestPanelOptions)
+      latestPanelOptions = []
+      hasLatestPanelOptions = false
+      clearPanelWait()
+    }
+    else {
+      beginPanelWait(route)
+      return
+    }
+  }
+  else if (lastFetched && lastFetched.routeKey === route.key && lastFetched.username === route.username) {
+    orgs = lastFetched.orgs
+  }
+  else {
+    latestPanelOptions = []
+    hasLatestPanelOptions = false
+    panelPageUsername = ''
+    if ((failedUntil.get(route.username) ?? 0) > Date.now()) {
+      logDiagnostic(route, {
+        status: '请求冷却中',
+        source,
+        total: 0,
+        shown: 0,
+        injected: 0,
+        detail: '此前请求失败，冷却期内不再重复请求',
+      })
+      return
+    }
+    const response = await fetchOrgs(route.username)
+    if (token !== scanToken || activeRouteKey !== route.key)
+      return
+    if (!response.ok) {
+      failedUntil.set(route.username, Date.now() + FETCH_FAILURE_COOLDOWN_MS)
+      logDiagnostic(route, {
+        status: '获取组织失败',
+        source,
+        total: 0,
+        shown: 0,
+        injected: 0,
+        detail: response.error,
+      })
+      return
+    }
+    orgs = response.data
+    lastFetched = { routeKey: route.key, username: route.username, orgs }
+  }
+
+  if (token !== scanToken || activeRouteKey !== route.key)
+    return
+  if (!section.container.isConnected || !section.entry.isConnected) {
+    scheduleScan()
+    return
+  }
+
+  const result = injectOrganizations(section, orgs)
+  logDiagnostic(route, {
+    status: result.injected > 0 ? '增强完成' : '页面已完整',
+    source,
+    total: orgs.length,
+    shown: result.shown,
+    injected: result.injected,
+    detail: result.injected > 0 ? '已使用 GitHub 原生 hovercard' : '无需注入额外组织',
+  })
+  if (state)
+    observeInjectedState(state)
+}
+
+function scheduleScan(delay = SCAN_DEBOUNCE_MS): void {
   clearTimeout(scanTimer)
   scanTimer = setTimeout(() => {
+    scanTimer = 0
     void scan()
-  }, RESCAN_DEBOUNCE_MS)
+  }, delay)
 }
 
-const observer = new MutationObserver(scheduleScan)
-observer.observe(document.body, { childList: true, subtree: true })
+window.addEventListener('message', (event) => {
+  if (event.source !== window || event.origin !== location.origin)
+    return
+  const message = event.data as PanelMessage
+  if (!event.data || message.type !== PANEL_MESSAGE_TYPE)
+    return
 
-// GitHub 软导航事件（多事件并听，运行时探测可用者）+ 浏览器历史导航兜底
+  const route = getProfileRoute()
+  if (!route || activeRouteKey !== route.key || currentSectionKind !== 'self')
+    return
+
+  if (!message.data || !message.data.userStatus)
+    return
+  const options = message.data.userStatus.organizationOptions
+  if (!Array.isArray(options))
+    return
+
+  latestPanelOptions = options
+    .filter(option => Boolean(option))
+    .map(option => ({ label: option.label, value: option.value }))
+  panelPageUsername = route.username
+  hasLatestPanelOptions = true
+  panelUnavailableRouteKey = ''
+  clearPanelWait()
+  scheduleScan(0)
+})
+
 const onNavigate = (): void => {
-  const currentUsername = getProfileUsername()
-  const samePage = currentUsername !== null
-    && (currentUsername === enhancedUsername || currentUsername === panelWaitUsername)
-  teardown()
-  if (!samePage) {
-    // 跨页导航：旧页面的劫持数据与等待态一并作废；
-    // 同页软导航噪音（用户名未变）则全部保留，避免反复重置等待态
-    dropPanelOptions()
-    panelWaitUsername = null
-  }
-  scheduleScan()
+  const route = getProfileRoute()
+  if ((route ? route.key : '') !== activeRouteKey)
+    resetRouteState(route)
+  else if (state && !isStateAlive(state))
+    teardownInjection()
+  scheduleScan(0)
 }
-const navEvents = ['turbo:load', 'soft-nav:end', 'pjax:end', 'popstate'] as const
-for (const type of navEvents)
+
+const navigationEvents = ['turbo:load', 'soft-nav:end', 'pjax:end', 'popstate'] as const
+for (const type of navigationEvents)
   addEventListener(type, onNavigate, true)
 
-void scan()
+scheduleScan(0)
