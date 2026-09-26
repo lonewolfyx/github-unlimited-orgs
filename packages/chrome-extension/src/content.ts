@@ -387,8 +387,7 @@ function isLoggedIn(): boolean {
 }
 
 /** organizationOptions → OrgInfo[]：value 即组织数据库 ID，可直接拼头像；label 即 login */
-function orgsFromPanel(username: string, options: Array<{ label: string, value: number }>): OrgInfo[] {
-  void username
+function orgsFromPanel(options: Array<{ label: string, value: number }>): OrgInfo[] {
   return options.map(o => ({
     username: o.label,
     lable: o.label,
@@ -409,8 +408,9 @@ async function scan(): Promise<void> {
   const token = ++scanToken
   const username = getProfileUsername()
 
-  // 同一主页且注入仍然存活时跳过（自身注入触发的 MutationObserver 会再次进入这里）
-  if (username && username === enhancedUsername && state?.container.isConnected)
+  // 同一主页且注入仍然存活时跳过（自身注入触发的 MutationObserver 会再次进入这里）；
+  // 但刚劫持到 side-panel 数据时必须重扫，用完整数据刷新已有注入
+  if (username && username === enhancedUsername && state?.container.isConnected && !latestPanelOptions)
     return
 
   teardown()
@@ -431,13 +431,15 @@ async function scan(): Promise<void> {
     return
   }
 
-  let orgs = orgCache.get(username)
+  let orgs: OrgInfo[] | undefined
 
-  // 通道 1（登录态）：优先消费劫持到的 side-panel 数据，不调用自建 API
-  if (!orgs && isLoggedIn()) {
+  if (isLoggedIn()) {
+    // 通道 1（登录态）：side-panel 数据是唯一真相源。
+    // 不读自建 API 的 sessionStorage/内存缓存 —— 那份列表不完整（如 15 vs 79）。
     if (latestPanelOptions) {
-      orgs = orgsFromPanel(username, latestPanelOptions)
+      orgs = orgsFromPanel(latestPanelOptions)
       latestPanelOptions = null
+      orgCache.set(username, orgs)
       log(`side-panel 通道：${orgs.length} 个组织`)
     }
     else if (!panelWaitStart) {
@@ -449,27 +451,38 @@ async function scan(): Promise<void> {
     }
     else {
       log(`side-panel 等待超时（${PANEL_WAIT_MS}ms），回落自建 API`)
+      try {
+        orgs = await fetchOrgs(username)
+      }
+      catch {
+        failedUntil.set(username, Date.now() + FETCH_FAILURE_COOLDOWN_MS)
+        return
+      }
     }
   }
-
-  // 通道 2（匿名态 / 登录态超时兜底）：自建 API
-  if (!orgs) {
-    if ((failedUntil.get(username) ?? 0) > Date.now()) {
-      log('API 失败冷却期内，本轮跳过')
-      return
-    }
-    try {
-      orgs = await fetchOrgs(username)
-      orgCache.set(username, orgs)
-    }
-    catch {
-      // 静默降级：保留原生 "+N more"，冷却期内不再重试
-      failedUntil.set(username, Date.now() + FETCH_FAILURE_COOLDOWN_MS)
-      return
+  else {
+    // 通道 2（匿名态）：自建 API（含 sessionStorage 缓存）
+    orgs = orgCache.get(username)
+    if (!orgs) {
+      if ((failedUntil.get(username) ?? 0) > Date.now()) {
+        log('API 失败冷却期内，本轮跳过')
+        return
+      }
+      try {
+        orgs = await fetchOrgs(username)
+        orgCache.set(username, orgs)
+      }
+      catch {
+        // 静默降级：保留原生 "+N more"，冷却期内不再重试
+        failedUntil.set(username, Date.now() + FETCH_FAILURE_COOLDOWN_MS)
+        return
+      }
     }
   }
   if (token !== scanToken)
     return // 扫描期间发生了导航，丢弃本次结果
+  if (!orgs)
+    return // 两条通道都未产出数据（理论上不可达）
 
   const shown = existingLogins(section.container)
   const extra = orgs.filter(o => !shown.has(o.username.toLowerCase()))
