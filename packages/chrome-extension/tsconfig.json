@@ -1,7 +1,8 @@
 {
-  "extends": "@lonewolfyx/tsconfig/tsconfig.lib.json",
+  "extends": "@github-unlimited-orgs/tsconfig/base.json",
   "compilerOptions": {
     "resolveJsonModule": true,
+    "types": ["chrome"],
     "noUnusedLocals": false,
     "noUnusedParameters": false,
     "declarationMap": false

@@ -7,8 +7,8 @@
     "dev": "tsdown --watch"
   },
   "devDependencies": {
-    "@github-unlimited-orgs/core": "workspace:*",
     "@github-unlimited-orgs/tsconfig": "workspace:*",
+    "@types/chrome": "^0.3.0",
     "tsdown": "^0.23.0"
   }
 }
