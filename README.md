@@ -148,7 +148,7 @@ Install the generated `packages/tampermonkey/dist/github-unlimited-orgs.user.js`
 | Key | Location | Default | Purpose |
 | --- | --- | --- | --- |
 | `GITHUB_TOKEN` | `packages/api/.env` | — | Raises the GitHub API rate limit (60 → 5000 req/h) |
-| `API_BASE_URL` | `packages/core/src/config.ts` | `http://localhost:3000` | Address of the project API |
+| `API_BASE_URL` | `packages/core/src/config.ts` | `https://github-unlimited-orgs.vercel.app` | Address of the project API |
 
 ## 🧪 Lint
 
