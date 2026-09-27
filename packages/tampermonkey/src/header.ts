@@ -5,7 +5,7 @@
 export const userscriptHeader = `// ==UserScript==
 // @name         GitHub Unlimited Orgs
 // @namespace    https://github.com/lonewolfyx/github-unlimited-orgs
-// @version      0.2.0
+// @version      0.2.1
 // @description  Expand all organizations on GitHub profiles with hover cards
 // @author       lonewolfyx
 // @match        https://github.com/*

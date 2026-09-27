@@ -28,7 +28,6 @@ function mainWorldInterceptor(panelMessageType: string, panelRequestType: string
 
   const originalFetch = window.fetch.bind(window)
   window.fetch = (...args: Parameters<typeof window.fetch>) => {
-    const routeKey = currentRouteKey()
     const promise = originalFetch(...args)
 
     try {
@@ -41,7 +40,10 @@ function mainWorldInterceptor(panelMessageType: string, panelRequestType: string
             ? input.url
             : ''
 
-      if (routeKey && panelUrlRe.test(url)) {
+      if (panelUrlRe.test(url)) {
+        const routeKey = currentRouteKey()
+        if (!routeKey)
+          return promise
         void promise
           .then(response => response.clone().json())
           .then((data: unknown) => {

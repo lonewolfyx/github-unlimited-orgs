@@ -46,7 +46,8 @@ const RESERVED_PATHS = new Set([
   'watching',
 ])
 
-export const ORG_HINT_SELECTOR = 'a.avatar-group-item[data-hovercard-type="organization"], a[href*="tab=organizations"], a[href="/settings/organizations"], h2, h3'
+const ORG_ENTRY_SELECTOR = 'a.avatar-group-item[data-hovercard-type="organization"], a[href*="tab=organizations"], a[href="/settings/organizations"]'
+const ORG_HEADING_SELECTOR = 'h2, h3'
 
 export interface OrgSection {
   container: HTMLElement
@@ -57,6 +58,22 @@ export interface OrgSection {
 export interface RenderHandle {
   isConnected: () => boolean
   dispose: () => void
+}
+
+function isOrgHeading(element: Element): boolean {
+  return element.matches(ORG_HEADING_SELECTOR) && element.textContent?.trim() === 'Organizations'
+}
+
+export function containsOrgHint(element: Element): boolean {
+  if (element.matches(ORG_ENTRY_SELECTOR) || element.querySelector(ORG_ENTRY_SELECTOR))
+    return true
+  if (isOrgHeading(element))
+    return true
+  for (const heading of element.querySelectorAll(ORG_HEADING_SELECTOR)) {
+    if (isOrgHeading(heading))
+      return true
+  }
+  return false
 }
 
 export function getProfileRoute(url: URL = new URL(location.href)): ProfileRoute | false {
@@ -260,7 +277,9 @@ export function renderOrganizations(section: OrgSection, orgs: OrgInfo[]): Rende
   return {
     isConnected: () => insertedNodes.every(node => node.isConnected)
       && section.container.isConnected
-      && (!marker || (marker.isConnected && getComputedStyle(marker).display === 'none')),
+      && (!marker || (marker.isConnected
+        && marker.style.getPropertyValue('display') === 'none'
+        && marker.style.getPropertyPriority('display') === 'important')),
     dispose() {
       for (const node of insertedNodes)
         node.remove()
