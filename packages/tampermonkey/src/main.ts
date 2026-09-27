@@ -1,15 +1,19 @@
 import type { OrgInfo, PanelMessage, ProfileRoute } from './types'
 import { requestOrganizations } from './api'
-import { findOrgSection, getProfileRoute, ORG_HINT_SELECTOR, renderOrganizations } from './dom'
+import { containsOrgHint, findOrgSection, getProfileRoute, renderOrganizations } from './dom'
 import { installPageInterceptor, PANEL_MESSAGE_TYPE, PANEL_REQUEST_TYPE } from './page-interceptor'
+
+const SECTION_DISCOVERY_WINDOW_MS = 10_000
 
 installPageInterceptor()
 
 let activeRoute: ProfileRoute | false = false
 let routeToken = 0
 let discoveryObserver: MutationObserver | null = null
+let discoveryTimer = 0
 let renderHandle: ReturnType<typeof renderOrganizations> = false
 let renderObserver: MutationObserver | null = null
+let navigationFrame = 0
 const panelData = new Map<string, OrgInfo[]>()
 const panelRequests = new Set<string>()
 
@@ -35,6 +39,8 @@ function parsePanelOptions(value: unknown): OrgInfo[] | false {
 }
 
 function stopDiscovery(): void {
+  clearTimeout(discoveryTimer)
+  discoveryTimer = 0
   discoveryObserver?.disconnect()
   discoveryObserver = null
 }
@@ -89,9 +95,19 @@ function observeRenderedSection(route: ProfileRoute, container: HTMLElement): vo
   // Watch only the rendered section and its direct parent. GitHub replaces
   // this small part of the profile during navigation; observing the whole
   // profile subtree makes every unrelated update expensive.
-  renderObserver.observe(container, { childList: true, subtree: true })
+  renderObserver.observe(container, { childList: true })
   if (root !== container)
     renderObserver.observe(root, { childList: true })
+}
+
+function containsRelevantAddition(records: MutationRecord[]): boolean {
+  for (const record of records) {
+    for (const node of record.addedNodes) {
+      if (node instanceof Element && containsOrgHint(node))
+        return true
+    }
+  }
+  return false
 }
 
 async function enhance(route: ProfileRoute): Promise<boolean> {
@@ -110,9 +126,10 @@ async function enhance(route: ProfileRoute): Promise<boolean> {
     return false
 
   // The profile section can be replaced while the public API request is in
-  // flight. Re-discover it before rendering so a response is never applied
-  // to a detached section or leaves a newly rendered "+N more" entry behind.
-  const currentSection = findOrgSection()
+  // flight. Re-discover only when the captured section became stale.
+  const currentSection = section.container.isConnected && section.entryWrapper.isConnected
+    ? section
+    : findOrgSection()
   if (!currentSection?.entryWrapper || !currentSection.container.isConnected)
     return false
 
@@ -130,10 +147,7 @@ function observeUntilReady(route: ProfileRoute): void {
   discoveryObserver = new MutationObserver((records) => {
     if (scheduled)
       return
-    const relevant = records.some(record => [...record.addedNodes].some(node =>
-      node instanceof Element && (node.matches(ORG_HINT_SELECTOR) || Boolean(node.querySelector(ORG_HINT_SELECTOR))),
-    ))
-    if (!relevant)
+    if (!containsRelevantAddition(records))
       return
     scheduled = true
     requestAnimationFrame(() => {
@@ -143,6 +157,10 @@ function observeUntilReady(route: ProfileRoute): void {
     })
   })
   discoveryObserver.observe(root, { childList: true, subtree: true })
+  discoveryTimer = window.setTimeout(() => {
+    if (activeRoute && activeRoute.key === route.key)
+      stopDiscovery()
+  }, SECTION_DISCOVERY_WINDOW_MS)
 }
 
 function start(route: ProfileRoute): void {
@@ -165,6 +183,15 @@ function onNavigate(): void {
     start(route)
 }
 
+function scheduleNavigation(): void {
+  if (navigationFrame)
+    return
+  navigationFrame = requestAnimationFrame(() => {
+    navigationFrame = 0
+    onNavigate()
+  })
+}
+
 window.addEventListener('message', (event) => {
   if (event.origin !== location.origin || !event.data)
     return
@@ -182,6 +209,6 @@ window.addEventListener('message', (event) => {
 })
 
 for (const eventName of ['turbo:load', 'soft-nav:end', 'pjax:end', 'popstate'] as const)
-  addEventListener(eventName, onNavigate, true)
+  addEventListener(eventName, scheduleNavigation, true)
 
 onNavigate()
