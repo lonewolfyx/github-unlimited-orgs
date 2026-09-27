@@ -236,17 +236,20 @@ export function renderOrganizations(section: OrgSection, orgs: OrgInfo[]): Rende
   if (missing.length === 0)
     return false
 
-  const list = document.createElement('span')
-  list.dataset.guoList = ''
-  list.style.cssText = 'display:inline-flex;flex-wrap:wrap;gap:4px;margin-left:4px;vertical-align:middle;'
-  for (const org of missing)
-    list.append(createOrgLink(org))
+  const fragment = document.createDocumentFragment()
+  const insertedNodes: ChildNode[] = []
+  for (const org of missing) {
+    const link = createOrgLink(org)
+    const spacer = document.createTextNode(' ')
+    fragment.append(link, spacer)
+    insertedNodes.push(link, spacer)
+  }
 
   const marker = section.entryWrapper
   if (marker)
-    section.container.insertBefore(list, marker)
+    section.container.insertBefore(fragment, marker)
   else
-    section.container.append(list)
+    section.container.append(fragment)
 
   const previousDisplay = marker?.style.getPropertyValue('display') ?? ''
   const previousDisplayPriority = marker?.style.getPropertyPriority('display') ?? ''
@@ -255,11 +258,12 @@ export function renderOrganizations(section: OrgSection, orgs: OrgInfo[]): Rende
   marker?.style.setProperty('display', 'none', 'important')
 
   return {
-    isConnected: () => list.isConnected
+    isConnected: () => insertedNodes.every(node => node.isConnected)
       && section.container.isConnected
       && (!marker || (marker.isConnected && getComputedStyle(marker).display === 'none')),
     dispose() {
-      list.remove()
+      for (const node of insertedNodes)
+        node.remove()
       if (!marker?.isConnected)
         return
       if (previousDisplay)
