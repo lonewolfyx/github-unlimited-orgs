@@ -14,6 +14,7 @@ function mainWorldInterceptor(panelMessageType: string, panelRequestType: string
 
   const panelUrlRe = /\/_side-panels\/user\.json(?:[?#]|$)/u
   const panelMessages = new Map<string, { type: string, routeKey: string, data: unknown }>()
+  const maxPanelMessages = 2
 
   function currentRouteKey(): string {
     try {
@@ -46,6 +47,8 @@ function mainWorldInterceptor(panelMessageType: string, panelRequestType: string
           .then((data: unknown) => {
             const message = { type: panelMessageType, routeKey, data }
             panelMessages.set(routeKey, message)
+            while (panelMessages.size > maxPanelMessages)
+              panelMessages.delete(panelMessages.keys().next().value as string)
             window.postMessage(message, location.origin)
           })
           .catch(() => {})
