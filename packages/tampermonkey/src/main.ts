@@ -130,7 +130,7 @@ async function enhance(route: ProfileRoute): Promise<boolean> {
   const currentSection = section.container.isConnected && section.entryWrapper.isConnected
     ? section
     : findOrgSection()
-  if (!currentSection?.entryWrapper || !currentSection.container.isConnected)
+  if (!currentSection || !currentSection.entryWrapper || !currentSection.container.isConnected)
     return false
 
   cleanupRender()
