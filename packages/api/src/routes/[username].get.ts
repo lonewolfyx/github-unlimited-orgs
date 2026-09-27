@@ -3,10 +3,10 @@ import { getRouterParam } from 'nitro/h3'
 import { useRuntimeConfig } from 'nitro/runtime-config'
 import { Octokit } from 'octokit'
 
-// 批量并发请求组织详情时的每批大小，避免瞬时打满 GitHub 限流
+// Batch size for concurrent org detail requests, to avoid spiking GitHub rate limits
 const DETAIL_BATCH_SIZE = 10
 
-// 缓存 6 小时；swr 同时生成 s-maxage 响应头，交由 Vercel 边缘 CDN 缓存
+// Cache for 6 hours; swr also emits the s-maxage header for the Vercel edge CDN
 const CACHE_MAX_AGE = 60 * 60 * 6
 
 export default defineCachedHandler(async (event) => {
@@ -20,7 +20,7 @@ export default defineCachedHandler(async (event) => {
     per_page: 100,
   })
 
-  // join_time 需要额外的组织详情请求；分批并发以控制延迟与失败率，单个失败降级为 null
+  // join_time requires an extra org detail request; batch concurrently to limit latency and failures, degrading individual failures to null
   const joinTimeByOrg = new Map<string, string | null>()
   for (let i = 0; i < orgs.length; i += DETAIL_BATCH_SIZE) {
     await Promise.all(orgs.slice(i, i + DETAIL_BATCH_SIZE).map(async (org) => {
