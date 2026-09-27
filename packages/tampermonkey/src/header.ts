@@ -13,7 +13,7 @@ export const userscriptHeader = `// ==UserScript==
 // @sandbox      DOM
 // @grant        GM_addElement
 // @grant        GM_xmlhttpRequest
-// @connect      api.github.com
+// @connect      localhost
 // @noframes
 // @homepageURL  https://github.com/lonewolfyx/github-unlimited-orgs
 // @supportURL   https://github.com/lonewolfyx/github-unlimited-orgs/issues
