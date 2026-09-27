@@ -5,7 +5,7 @@
 export const userscriptHeader = `// ==UserScript==
 // @name         GitHub Unlimited Orgs
 // @namespace    https://github.com/lonewolfyx/github-unlimited-orgs
-// @version      0.1.0
+// @version      0.2.0
 // @description  Expand all organizations on GitHub profiles with hover cards
 // @author       lonewolfyx
 // @match        https://github.com/*
@@ -13,7 +13,7 @@ export const userscriptHeader = `// ==UserScript==
 // @sandbox      DOM
 // @grant        GM_addElement
 // @grant        GM_xmlhttpRequest
-// @connect      localhost
+// @connect      api.github.com
 // @noframes
 // @homepageURL  https://github.com/lonewolfyx/github-unlimited-orgs
 // @supportURL   https://github.com/lonewolfyx/github-unlimited-orgs/issues

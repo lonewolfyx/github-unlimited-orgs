@@ -4,6 +4,11 @@ export interface OrgInfo {
   avatar: string
 }
 
+export interface ProfileRoute {
+  key: string
+  username: string
+}
+
 export interface SidePanelData {
   userStatus: {
     organizationOptions: Array<{
