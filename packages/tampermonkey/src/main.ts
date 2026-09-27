@@ -89,7 +89,7 @@ function observeRenderedSection(route: ProfileRoute, container: HTMLElement): vo
   // Watch only the rendered section and its direct parent. GitHub replaces
   // this small part of the profile during navigation; observing the whole
   // profile subtree makes every unrelated update expensive.
-  renderObserver.observe(container, { childList: true })
+  renderObserver.observe(container, { childList: true, subtree: true })
   if (root !== container)
     renderObserver.observe(root, { childList: true })
 }
@@ -104,14 +104,21 @@ async function enhance(route: ProfileRoute): Promise<boolean> {
     return false
 
   const orgs = await loadOrganizations(route, section.isSelf)
-  if (token !== routeToken || !activeRoute || activeRoute.key !== route.key || !section.container.isConnected)
+  if (token !== routeToken || !activeRoute || activeRoute.key !== route.key)
     return true
   if (!orgs)
     return false
 
+  // The profile section can be replaced while the public API request is in
+  // flight. Re-discover it before rendering so a response is never applied
+  // to a detached section or leaves a newly rendered "+N more" entry behind.
+  const currentSection = findOrgSection()
+  if (!currentSection?.entryWrapper || !currentSection.container.isConnected)
+    return false
+
   cleanupRender()
-  renderHandle = renderOrganizations(section, orgs)
-  observeRenderedSection(route, section.container)
+  renderHandle = renderOrganizations(currentSection, orgs)
+  observeRenderedSection(route, currentSection.container)
   return true
 }
 

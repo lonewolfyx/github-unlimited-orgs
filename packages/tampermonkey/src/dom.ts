@@ -248,16 +248,24 @@ export function renderOrganizations(section: OrgSection, orgs: OrgInfo[]): Rende
   else
     section.container.append(list)
 
-  const previousDisplay = marker?.style.display ?? ''
-  if (marker)
-    marker.style.display = 'none'
+  const previousDisplay = marker?.style.getPropertyValue('display') ?? ''
+  const previousDisplayPriority = marker?.style.getPropertyPriority('display') ?? ''
+  // GitHub's d-inline-block utility uses !important, so a normal inline
+  // display:none declaration does not hide the "+N more" wrapper.
+  marker?.style.setProperty('display', 'none', 'important')
 
   return {
-    isConnected: () => list.isConnected && section.container.isConnected,
+    isConnected: () => list.isConnected
+      && section.container.isConnected
+      && (!marker || (marker.isConnected && getComputedStyle(marker).display === 'none')),
     dispose() {
       list.remove()
-      if (marker?.isConnected)
-        marker.style.display = previousDisplay
+      if (!marker?.isConnected)
+        return
+      if (previousDisplay)
+        marker.style.setProperty('display', previousDisplay, previousDisplayPriority)
+      else
+        marker.style.removeProperty('display')
     },
   }
 }
