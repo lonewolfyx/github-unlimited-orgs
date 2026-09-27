@@ -8,10 +8,9 @@
  * custom API here.
  */
 
-// TODO(M4): Replace this with the production API domain after deployment and
-// allow it to be overridden through chrome.storage.sync.
-const API_BASE = 'http://localhost:3000'
-const API_TIMEOUT_MS = 10_000
+// TODO(M4): Replace API_BASE_URL with the production API domain after
+// deployment and allow it to be overridden through chrome.storage.sync.
+import { API_BASE_URL, API_TIMEOUT_MS, GITHUB_USERNAME_RE } from '@github-unlimited-orgs/core'
 
 interface FetchOrgsMessage {
   type: 'guo:fetch-orgs'
@@ -22,13 +21,11 @@ type FetchResponse
   = | { ok: true, data: object[] }
     | { ok: false, error: string }
 
-const GITHUB_USERNAME_RE = /^[\w-]{1,39}$/u
-
 chrome.runtime.onMessage.addListener((message: FetchOrgsMessage, _sender, sendResponse) => {
   if (!message || message.type !== 'guo:fetch-orgs' || !GITHUB_USERNAME_RE.test(message.username))
     return
 
-  const url = `${API_BASE}/${encodeURIComponent(message.username)}`
+  const url = `${API_BASE_URL}/${encodeURIComponent(message.username)}`
   fetch(url, { signal: AbortSignal.timeout(API_TIMEOUT_MS) })
     .then(async (res) => {
       if (!res.ok) {

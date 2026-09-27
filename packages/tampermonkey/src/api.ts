@@ -1,8 +1,5 @@
 import type { ApiOrg, FetchOrgsResponse, OrgInfo } from '@github-unlimited-orgs/core'
-import { createOrgRequester, normalizeOrgInfo } from '@github-unlimited-orgs/core'
-
-const API_TIMEOUT_MS = 10_000
-const API_BASE_URL = 'http://localhost:3000'
+import { API_BASE_URL, API_TIMEOUT_MS, createOrgRequester, normalizeOrgInfo } from '@github-unlimited-orgs/core'
 
 function requestApi(username: string): Promise<FetchOrgsResponse> {
   const url = `${API_BASE_URL}/${encodeURIComponent(username)}`

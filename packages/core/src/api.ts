@@ -3,7 +3,7 @@ import type { FetchOrgsResponse, OrgInfo } from './types'
 const CACHE_TTL_MS = 30 * 60 * 1000
 const STALE_CACHE_TTL_MS = 24 * 60 * 60 * 1000
 const CACHE_PREFIX = 'guo:orgs:'
-const GITHUB_USERNAME_RE = /^[\w-]{1,39}$/u
+export const GITHUB_USERNAME_RE = /^[\w-]{1,39}$/u
 
 export interface ApiOrg {
   avatar?: string
