@@ -1,21 +1,17 @@
 import type { OrgInfo, PanelMessage, ProfileRoute } from './types'
 import { requestOrganizations } from './api'
-import { findOrgSection, getProfileRoute, ORG_HINT_SELECTOR, renderOrganizations } from './dom'
+import { findOrgSection, getProfileRoute, renderOrganizations } from './dom'
 import { installPageInterceptor, PANEL_MESSAGE_TYPE, PANEL_REQUEST_TYPE } from './page-interceptor'
-
-const DISCOVERY_TIMEOUT_MS = 8_000
-const PANEL_WAIT_MS = 8_000
 
 installPageInterceptor()
 
 let activeRoute: ProfileRoute | false = false
 let routeToken = 0
 let discoveryObserver: MutationObserver | null = null
-let discoveryTimer = 0
 let renderHandle: ReturnType<typeof renderOrganizations> = false
 let renderObserver: MutationObserver | null = null
 const panelData = new Map<string, OrgInfo[]>()
-const panelWaiters = new Map<string, Set<(orgs: OrgInfo[]) => void>>()
+const panelRequests = new Set<string>()
 
 function parsePanelOptions(value: unknown): OrgInfo[] | false {
   if (!Array.isArray(value))
@@ -39,8 +35,6 @@ function parsePanelOptions(value: unknown): OrgInfo[] | false {
 }
 
 function stopDiscovery(): void {
-  clearTimeout(discoveryTimer)
-  discoveryTimer = 0
   discoveryObserver?.disconnect()
   discoveryObserver = null
 }
@@ -57,36 +51,28 @@ function reset(route: ProfileRoute | false): void {
   routeToken++
   stopDiscovery()
   cleanupRender()
+  panelRequests.clear()
   activeRoute = route
 }
 
-function waitForPanel(route: ProfileRoute): Promise<OrgInfo[] | false> {
-  const cached = panelData.get(route.key)
-  if (cached)
-    return Promise.resolve(cached)
-
+function requestPanel(route: ProfileRoute): void {
+  if (panelData.has(route.key) || panelRequests.has(route.key))
+    return
+  panelRequests.add(route.key)
   window.postMessage({ type: PANEL_REQUEST_TYPE, routeKey: route.key }, location.origin)
-  return new Promise((resolve) => {
-    let timer = 0
-    const waiter = (orgs: OrgInfo[]): void => {
-      clearTimeout(timer)
-      panelWaiters.get(route.key)?.delete(waiter)
-      resolve(orgs)
-    }
-    timer = setTimeout(() => {
-      panelWaiters.get(route.key)?.delete(waiter)
-      resolve(false)
-    }, PANEL_WAIT_MS)
-    const waiters = panelWaiters.get(route.key) ?? new Set()
-    waiters.add(waiter)
-    panelWaiters.set(route.key, waiters)
-  })
 }
 
 async function loadOrganizations(route: ProfileRoute, isSelf: boolean): Promise<OrgInfo[] | false> {
-  if (isSelf)
-    return waitForPanel(route)
+  if (isSelf) {
+    // "View all" belongs to the signed-in user's profile. GitHub already
+    // fetches the complete list in user.json; request a replay of that
+    // intercepted response instead of querying the public API.
+    requestPanel(route)
+    return panelData.get(route.key) ?? false
+  }
 
+  // A "+N more" entry is another user's profile, so its complete public
+  // organization list must come from the GitHub organizations endpoint.
   const response = await requestOrganizations(route.username)
   return response.ok ? response.data : false
 }
@@ -109,11 +95,13 @@ async function enhance(route: ProfileRoute): Promise<boolean> {
     return false
   stopDiscovery()
   if (!section.entryWrapper)
-    return true
+    return false
 
   const orgs = await loadOrganizations(route, section.isSelf)
-  if (token !== routeToken || !activeRoute || activeRoute.key !== route.key || !orgs || !section.container.isConnected)
+  if (token !== routeToken || !activeRoute || activeRoute.key !== route.key || !section.container.isConnected)
     return true
+  if (!orgs)
+    return false
 
   cleanupRender()
   renderHandle = renderOrganizations(section, orgs)
@@ -129,10 +117,7 @@ function observeUntilReady(route: ProfileRoute): void {
   discoveryObserver = new MutationObserver((records) => {
     if (scheduled)
       return
-    const relevant = records.some(record => [...record.addedNodes].some(node =>
-      node instanceof Element && (node.matches(ORG_HINT_SELECTOR) || Boolean(node.querySelector(ORG_HINT_SELECTOR))),
-    ))
-    if (!relevant)
+    if (!records.some(record => record.addedNodes.length > 0))
       return
     scheduled = true
     requestAnimationFrame(() => {
@@ -142,7 +127,6 @@ function observeUntilReady(route: ProfileRoute): void {
     })
   })
   discoveryObserver.observe(root, { childList: true, subtree: true })
-  discoveryTimer = setTimeout(stopDiscovery, DISCOVERY_TIMEOUT_MS)
 }
 
 function start(route: ProfileRoute): void {
@@ -159,12 +143,14 @@ function onNavigate(): void {
   const route = getProfileRoute()
   if ((route ? route.key : '') !== (activeRoute ? activeRoute.key : ''))
     reset(route)
+  if (route)
+    requestPanel(route)
   if (route && !(renderHandle && renderHandle.isConnected()))
     start(route)
 }
 
 window.addEventListener('message', (event) => {
-  if (event.source !== window || event.origin !== location.origin || !event.data)
+  if (event.origin !== location.origin || !event.data)
     return
   const message = event.data as Partial<PanelMessage>
   if (message.type !== PANEL_MESSAGE_TYPE || typeof message.routeKey !== 'string')
@@ -173,9 +159,6 @@ window.addEventListener('message', (event) => {
   if (!orgs)
     return
   panelData.set(message.routeKey, orgs)
-  for (const resolve of panelWaiters.get(message.routeKey) ?? [])
-    resolve(orgs)
-  panelWaiters.delete(message.routeKey)
   if (activeRoute && activeRoute.key === message.routeKey)
     start(activeRoute)
 })

@@ -13,7 +13,7 @@ function mainWorldInterceptor(panelMessageType: string, panelRequestType: string
   pageWindow[marker] = true
 
   const panelUrlRe = /\/_side-panels\/user\.json(?:[?#]|$)/u
-  let lastMessage: { type: string, routeKey: string, data: unknown } | false = false
+  const panelMessages = new Map<string, { type: string, routeKey: string, data: unknown }>()
 
   function currentRouteKey(): string {
     try {
@@ -25,47 +25,47 @@ function mainWorldInterceptor(panelMessageType: string, panelRequestType: string
     }
   }
 
-  const originalFetch = window.fetch
-  window.fetch = new Proxy(originalFetch, {
-    apply(target, thisArg, args: Parameters<typeof window.fetch>) {
-      const routeKey = currentRouteKey()
-      const promise = Reflect.apply(target, thisArg, args) as ReturnType<typeof window.fetch>
+  const originalFetch = window.fetch.bind(window)
+  window.fetch = (...args: Parameters<typeof window.fetch>) => {
+    const routeKey = currentRouteKey()
+    const promise = originalFetch(...args)
 
-      try {
-        const input = args[0]
-        const url = typeof input === 'string'
-          ? input
-          : input instanceof URL
-            ? input.href
-            : input instanceof Request
-              ? input.url
-              : ''
+    try {
+      const input = args[0]
+      const url = typeof input === 'string'
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input instanceof Request
+            ? input.url
+            : ''
 
-        if (routeKey && panelUrlRe.test(url)) {
-          void promise
-            .then(response => response.clone().json())
-            .then((data: unknown) => {
-              lastMessage = { type: panelMessageType, routeKey, data }
-              window.postMessage(lastMessage, location.origin)
-            })
-            .catch(() => {})
-        }
+      if (routeKey && panelUrlRe.test(url)) {
+        void promise
+          .then(response => response.clone().json())
+          .then((data: unknown) => {
+            const message = { type: panelMessageType, routeKey, data }
+            panelMessages.set(routeKey, message)
+            window.postMessage(message, location.origin)
+          })
+          .catch(() => {})
       }
-      catch {}
+    }
+    catch {}
 
-      return promise
-    },
-  })
+    return promise
+  }
 
   window.addEventListener('message', (event) => {
-    if (event.source !== window || event.origin !== location.origin || !event.data)
+    if (event.origin !== location.origin || !event.data)
       return
 
     const request = event.data as { type?: unknown, routeKey?: unknown }
     if (request.type !== panelRequestType || typeof request.routeKey !== 'string')
       return
-    if (lastMessage && lastMessage.routeKey === request.routeKey)
-      window.postMessage(lastMessage, location.origin)
+    const message = panelMessages.get(request.routeKey)
+    if (message)
+      window.postMessage(message, location.origin)
   })
 }
 

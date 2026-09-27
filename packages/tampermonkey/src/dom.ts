@@ -89,6 +89,15 @@ function directChildOf(element: HTMLElement, container: HTMLElement): HTMLElemen
   return current
 }
 
+function resolveContainer(element: Element): HTMLElement | null {
+  let current = element.parentElement
+  for (let depth = 0; current && depth < 6; depth++, current = current.parentElement) {
+    if (current.querySelector('a.avatar-group-item img, img'))
+      return current
+  }
+  return null
+}
+
 function findEntry(container: HTMLElement): HTMLElement | null {
   const settingsLink = container.querySelector<HTMLElement>('a[href="/settings/organizations"]')
   if (settingsLink)
@@ -106,6 +115,34 @@ function findEntry(container: HTMLElement): HTMLElement | null {
 }
 
 export function findOrgSection(root: ParentNode = document): OrgSection | false {
+  // The signed-in profile exposes a literal View all settings link. Locate it
+  // globally first because the heading and the entry are not always siblings
+  // in GitHub's rendered profile tree.
+  for (const entry of root.querySelectorAll<HTMLElement>('a[href="/settings/organizations"]')) {
+    const container = resolveContainer(entry)
+    if (container) {
+      return {
+        container,
+        entryWrapper: directChildOf(entry, container),
+        isSelf: true,
+      }
+    }
+  }
+
+  // Other profiles expose the collapsed organization count as +N more.
+  for (const entry of root.querySelectorAll<HTMLElement>('a[href*="tab=organizations"]')) {
+    if (!MORE_TEXT_RE.test(entry.textContent?.trim() ?? ''))
+      continue
+    const container = resolveContainer(entry)
+    if (container) {
+      return {
+        container,
+        entryWrapper: directChildOf(entry, container),
+        isSelf: false,
+      }
+    }
+  }
+
   for (const heading of root.querySelectorAll<HTMLElement>('h2, h3')) {
     if (heading.textContent?.trim() !== 'Organizations')
       continue
@@ -113,28 +150,15 @@ export function findOrgSection(root: ParentNode = document): OrgSection | false 
     if (!container)
       continue
     const entry = findEntry(container)
-    return {
-      container,
-      entryWrapper: entry ? directChildOf(entry, container) : null,
-      isSelf: Boolean(container.querySelector('a[href="/settings/organizations"]')),
-    }
-  }
-
-  // Fallback for the brief render phase where the entry appears before the heading.
-  for (const entry of root.querySelectorAll<HTMLElement>('a[href="/settings/organizations"], a[href*="tab=organizations"]')) {
-    if (!entry.matches('a[href="/settings/organizations"]') && !MORE_TEXT_RE.test(entry.textContent?.trim() ?? ''))
-      continue
-    let container = entry.parentElement
-    for (let depth = 0; container && depth < 4; depth++, container = container.parentElement) {
-      if (container.querySelector('a.avatar-group-item img')) {
-        return {
-          container,
-          entryWrapper: directChildOf(entry, container),
-          isSelf: entry.matches('a[href="/settings/organizations"]'),
-        }
+    if (entry) {
+      return {
+        container,
+        entryWrapper: directChildOf(entry, container),
+        isSelf: Boolean(container.querySelector('a[href="/settings/organizations"]')),
       }
     }
   }
+
   return false
 }
 
@@ -187,6 +211,7 @@ function createOrgLink(org: OrgInfo): HTMLAnchorElement {
 
   const image = document.createElement('img')
   image.className = 'avatar'
+  image.setAttribute('data-view-component', 'true')
   image.src = avatarUrl(org.avatar)
   image.alt = `@${login}`
   image.width = 32
