@@ -13,11 +13,21 @@ function mainWorldInterceptor(panelMessageType: string, panelRequestType: string
   pageWindow[marker] = true
 
   const panelUrlRe = /\/_side-panels\/user\.json(?:[?#]|$)/u
-  let lastMessage: { type: string, routeKey: string, data: unknown } | false = false
+  const panelMessages = new Map<string, { type: string, routeKey: string, data: unknown }>()
+
+  function currentRouteKey(): string {
+    try {
+      const segments = location.pathname.split('/').filter(Boolean)
+      return segments.length === 1 ? `/${decodeURIComponent(segments[0]!).toLowerCase()}` : ''
+    }
+    catch {
+      return ''
+    }
+  }
 
   const originalFetch = window.fetch.bind(window)
   window.fetch = (...args: Parameters<typeof window.fetch>) => {
-    const routeKey = `${location.pathname}${location.search}`
+    const routeKey = currentRouteKey()
     const promise = originalFetch(...args)
 
     try {
@@ -30,12 +40,13 @@ function mainWorldInterceptor(panelMessageType: string, panelRequestType: string
             ? input.url
             : ''
 
-      if (panelUrlRe.test(url)) {
+      if (routeKey && panelUrlRe.test(url)) {
         void promise
           .then(response => response.clone().json())
           .then((data: unknown) => {
-            lastMessage = { type: panelMessageType, routeKey, data }
-            window.postMessage(lastMessage, location.origin)
+            const message = { type: panelMessageType, routeKey, data }
+            panelMessages.set(routeKey, message)
+            window.postMessage(message, location.origin)
           })
           .catch(() => {})
       }
@@ -46,14 +57,15 @@ function mainWorldInterceptor(panelMessageType: string, panelRequestType: string
   }
 
   window.addEventListener('message', (event) => {
-    if (event.source !== window || event.origin !== location.origin || !event.data)
+    if (event.origin !== location.origin || !event.data)
       return
 
     const request = event.data as { type?: unknown, routeKey?: unknown }
     if (request.type !== panelRequestType || typeof request.routeKey !== 'string')
       return
-    if (lastMessage && lastMessage.routeKey === request.routeKey)
-      window.postMessage(lastMessage, location.origin)
+    const message = panelMessages.get(request.routeKey)
+    if (message)
+      window.postMessage(message, location.origin)
   })
 }
 
