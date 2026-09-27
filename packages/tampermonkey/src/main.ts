@@ -1,6 +1,6 @@
 import type { OrgInfo, PanelMessage, ProfileRoute } from './types'
 import { requestOrganizations } from './api'
-import { findOrgSection, getProfileRoute, renderOrganizations } from './dom'
+import { findOrgSection, getProfileRoute, ORG_HINT_SELECTOR, renderOrganizations } from './dom'
 import { installPageInterceptor, PANEL_MESSAGE_TYPE, PANEL_REQUEST_TYPE } from './page-interceptor'
 
 installPageInterceptor()
@@ -51,6 +51,7 @@ function reset(route: ProfileRoute | false): void {
   routeToken++
   stopDiscovery()
   cleanupRender()
+  panelData.clear()
   panelRequests.clear()
   activeRoute = route
 }
@@ -85,7 +86,12 @@ function observeRenderedSection(route: ProfileRoute, container: HTMLElement): vo
     if (activeRoute && activeRoute.key === route.key && renderHandle && !renderHandle.isConnected())
       start(route)
   })
-  renderObserver.observe(root, { childList: true, subtree: true })
+  // Watch only the rendered section and its direct parent. GitHub replaces
+  // this small part of the profile during navigation; observing the whole
+  // profile subtree makes every unrelated update expensive.
+  renderObserver.observe(container, { childList: true })
+  if (root !== container)
+    renderObserver.observe(root, { childList: true })
 }
 
 async function enhance(route: ProfileRoute): Promise<boolean> {
@@ -117,7 +123,10 @@ function observeUntilReady(route: ProfileRoute): void {
   discoveryObserver = new MutationObserver((records) => {
     if (scheduled)
       return
-    if (!records.some(record => record.addedNodes.length > 0))
+    const relevant = records.some(record => [...record.addedNodes].some(node =>
+      node instanceof Element && (node.matches(ORG_HINT_SELECTOR) || Boolean(node.querySelector(ORG_HINT_SELECTOR))),
+    ))
+    if (!relevant)
       return
     scheduled = true
     requestAnimationFrame(() => {
@@ -158,9 +167,11 @@ window.addEventListener('message', (event) => {
   const orgs = parsePanelOptions(message.data?.userStatus?.organizationOptions)
   if (!orgs)
     return
+  if (!activeRoute || activeRoute.key !== message.routeKey)
+    return
+  panelData.clear()
   panelData.set(message.routeKey, orgs)
-  if (activeRoute && activeRoute.key === message.routeKey)
-    start(activeRoute)
+  start(activeRoute)
 })
 
 for (const eventName of ['turbo:load', 'soft-nav:end', 'pjax:end', 'popstate'] as const)
