@@ -72,8 +72,8 @@ async function loadOrganizations(route: ProfileRoute, isSelf: boolean): Promise<
     return panelData.get(route.key) ?? false
   }
 
-  // A "+N more" entry is another user's profile, so its complete public
-  // organization list must come from the GitHub organizations endpoint.
+  // A "+N more" entry is another user's profile, so request its complete
+  // public organization list from the configured project API.
   const response = await requestOrganizations(route.username)
   return response.ok ? response.data : false
 }
