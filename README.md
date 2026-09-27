@@ -13,9 +13,9 @@ Expand the collapsed `+N more` / `View all` avatar list with native hover cards,
 ---
 
 
-| Before                  | After                                           |
-|-------------------------|-------------------------------------------------|
-| <img src="./assets/before_organizations.png" /> | <img src="./assets/aftore_organizations.png" /> |
+| Before                                                       | After                                                      |
+|--------------------------------------------------------------|------------------------------------------------------------|
+| <img src="./assets/before_organizations.png" alt="before" /> | <img src="./assets/after_organizations.png" alt="after" /> |
 
 
 ## ✨ Features
