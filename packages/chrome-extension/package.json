@@ -3,10 +3,11 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "build": "tsdown && cp src/manifest.json dist/manifest.json",
+    "build": "rm -rf dist && tsdown && cp src/manifest.json dist/manifest.json",
     "dev": "tsdown --watch"
   },
   "devDependencies": {
+    "@github-unlimited-orgs/core": "workspace:*",
     "@github-unlimited-orgs/tsconfig": "workspace:*",
     "@types/chrome": "^0.3.0",
     "tsdown": "^0.23.0"

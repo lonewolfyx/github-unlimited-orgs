@@ -1,18 +1,22 @@
 import { defineConfig } from 'tsdown'
 
-export default defineConfig({
-  entry: [
-    'src/content.ts',
-    'src/background.ts',
-    'src/main-world.ts',
-  ],
+// Each entry is a standalone script referenced by manifest.json, so build them
+// in separate runs: multi-entry builds code-split shared modules into chunks,
+// and MV3 content scripts / service workers cannot load chunk imports.
+// No `clean` here: in watch mode each config rebuilds independently, and a
+// clean would wipe the other entries' outputs. The build script removes dist
+// explicitly instead.
+const shared = {
   outDir: 'dist',
   format: 'esm',
   platform: 'browser',
   dts: false,
   minify: true,
-  clean: true,
-  outputOptions: {
-    entryFileNames: '[name].js',
-  },
-})
+  outputOptions: { entryFileNames: '[name].js' },
+} as const
+
+export default defineConfig([
+  { ...shared, entry: ['src/content.ts'] },
+  { ...shared, entry: ['src/background.ts'] },
+  { ...shared, entry: ['src/main-world.ts'] },
+])

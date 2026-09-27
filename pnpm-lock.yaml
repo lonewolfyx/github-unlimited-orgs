@@ -218,6 +218,9 @@ importers:
 
   packages/chrome-extension:
     devDependencies:
+      '@github-unlimited-orgs/core':
+        specifier: workspace:*
+        version: link:../core
       '@github-unlimited-orgs/tsconfig':
         specifier: workspace:*
         version: link:../tsconfig
@@ -228,8 +231,17 @@ importers:
         specifier: ^0.23.0
         version: 0.23.0(typescript@6.0.3)
 
+  packages/core:
+    devDependencies:
+      '@github-unlimited-orgs/tsconfig':
+        specifier: workspace:*
+        version: link:../tsconfig
+
   packages/tampermonkey:
     devDependencies:
+      '@github-unlimited-orgs/core':
+        specifier: workspace:*
+        version: link:../core
       '@github-unlimited-orgs/tsconfig':
         specifier: workspace:*
         version: link:../tsconfig
