@@ -4,7 +4,7 @@ import { findOrgSection, getProfileRoute, ORG_HINT_SELECTOR, renderOrganizations
 import { installPageInterceptor, PANEL_MESSAGE_TYPE, PANEL_REQUEST_TYPE } from './page-interceptor'
 
 const DISCOVERY_TIMEOUT_MS = 8_000
-const PANEL_GRACE_MS = 1_200
+const PANEL_WAIT_MS = 8_000
 
 installPageInterceptor()
 
@@ -76,7 +76,7 @@ function waitForPanel(route: ProfileRoute): Promise<OrgInfo[] | false> {
     timer = setTimeout(() => {
       panelWaiters.get(route.key)?.delete(waiter)
       resolve(false)
-    }, PANEL_GRACE_MS)
+    }, PANEL_WAIT_MS)
     const waiters = panelWaiters.get(route.key) ?? new Set()
     waiters.add(waiter)
     panelWaiters.set(route.key, waiters)
@@ -84,11 +84,9 @@ function waitForPanel(route: ProfileRoute): Promise<OrgInfo[] | false> {
 }
 
 async function loadOrganizations(route: ProfileRoute, isSelf: boolean): Promise<OrgInfo[] | false> {
-  if (isSelf) {
-    const intercepted = await waitForPanel(route)
-    if (intercepted)
-      return intercepted
-  }
+  if (isSelf)
+    return waitForPanel(route)
+
   const response = await requestOrganizations(route.username)
   return response.ok ? response.data : false
 }
