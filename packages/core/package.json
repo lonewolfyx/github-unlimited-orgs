@@ -1,0 +1,11 @@
+{
+  "name": "@github-unlimited-orgs/core",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "devDependencies": {
+    "@github-unlimited-orgs/tsconfig": "workspace:*"
+  }
+}

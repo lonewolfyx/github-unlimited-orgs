@@ -1,0 +1,5 @@
+{
+  "extends": "@lonewolfyx/tsconfig/tsconfig.lib.json",
+  "compilerOptions": {
+  }
+}
