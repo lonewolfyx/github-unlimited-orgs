@@ -1,4 +1,4 @@
-import { defineHandler } from 'nitro'
+import { defineCachedHandler } from 'nitro/cache'
 import { getRouterParam } from 'nitro/h3'
 import { useRuntimeConfig } from 'nitro/runtime-config'
 import { Octokit } from 'octokit'
@@ -6,7 +6,10 @@ import { Octokit } from 'octokit'
 // 批量并发请求组织详情时的每批大小，避免瞬时打满 GitHub 限流
 const DETAIL_BATCH_SIZE = 10
 
-export default defineHandler(async (event) => {
+// 缓存 6 小时；swr 同时生成 s-maxage 响应头，交由 Vercel 边缘 CDN 缓存
+const CACHE_MAX_AGE = 60 * 60 * 6
+
+export default defineCachedHandler(async (event) => {
   const username = getRouterParam(event, 'username')!
 
   const { githubToken } = useRuntimeConfig()
@@ -41,4 +44,8 @@ export default defineHandler(async (event) => {
       join_time: joinTimeByOrg.get(org.login) ?? null,
     }
   })
+}, {
+  name: 'orgs',
+  maxAge: CACHE_MAX_AGE,
+  swr: true,
 })
