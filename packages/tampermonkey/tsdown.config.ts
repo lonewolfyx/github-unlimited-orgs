@@ -7,9 +7,8 @@ export default defineConfig({
   format: 'iife',
   platform: 'browser',
   dts: false,
-  minify: false,
   clean: true,
   banner: userscriptHeader,
-  // 完全控制输出文件名（默认 iife 格式会插入 .iife 中缀）
+  // Full control over the output file name (iife format inserts a .iife infix by default)
   outputOptions: { entryFileNames: 'github-unlimited-orgs.user.js' },
 })
