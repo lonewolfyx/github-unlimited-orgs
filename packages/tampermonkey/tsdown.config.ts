@@ -1,5 +1,6 @@
 import { defineConfig } from 'tsdown'
-import { userscriptHeader } from './src/header.ts'
+import { getReleaseVersion } from '../../scripts/release-version.mjs'
+import { createUserscriptHeader } from './src/header.ts'
 
 export default defineConfig({
   entry: ['src/main.ts'],
@@ -8,7 +9,7 @@ export default defineConfig({
   platform: 'browser',
   dts: false,
   clean: true,
-  banner: userscriptHeader,
+  banner: createUserscriptHeader(getReleaseVersion()),
   // Full control over the output file name (iife format inserts a .iife infix by default)
   outputOptions: { entryFileNames: 'github-unlimited-orgs.user.js' },
 })

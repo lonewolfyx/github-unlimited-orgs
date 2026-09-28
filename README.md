@@ -108,6 +108,10 @@ The API is now running at `http://localhost:3000`. Open `/` for the interactive 
 
 ## 🧩 Using the Chrome extension
 
+Download `github-unlimited-orgs-chrome.zip` from the [latest release](https://github.com/lonewolfyx/github-unlimited-orgs/releases/latest), extract it, then load the extracted directory from `chrome://extensions` with **Developer mode** enabled.
+
+To build it locally:
+
 ```bash
 # Build the extension (outputs to packages/chrome-extension/dist)
 pnpm -F @github-unlimited-orgs/chrome-extension build
@@ -119,6 +123,10 @@ pnpm -F @github-unlimited-orgs/chrome-extension dev
 Then in Chrome, navigate to `chrome://extensions`, enable **Developer mode**, and **Load unpacked** pointing at `packages/chrome-extension/dist`.
 
 ## 🐒 Using the Tampermonkey script
+
+[Install the latest userscript](https://github.com/lonewolfyx/github-unlimited-orgs/releases/latest/download/github-unlimited-orgs.user.js). Tampermonkey will use the script metadata to check future releases automatically.
+
+To build it locally:
 
 ```bash
 # Build the userscript

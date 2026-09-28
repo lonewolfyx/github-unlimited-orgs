@@ -1,0 +1,141 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build and release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+          cache: pnpm
+
+      - name: Validate release metadata
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tag="${GITHUB_REF_NAME}"
+          version="$(node --input-type=module -e "import { getReleaseVersion } from './scripts/release-version.mjs'; process.stdout.write(getReleaseVersion())")"
+
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid release tag: $tag"
+            exit 1
+          fi
+
+          if [[ "$tag" != "v$version" ]]; then
+            echo "Tag $tag does not match package version $version"
+            exit 1
+          fi
+
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          release_commit="$(git rev-list -n 1 "$tag")"
+
+          if ! git merge-base --is-ancestor "$release_commit" origin/main; then
+            echo "Tag $tag does not point to a commit contained in main"
+            exit 1
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm run lint
+
+      - name: Build Chrome extension
+        run: pnpm --filter @github-unlimited-orgs/chrome-extension run build
+
+      - name: Build Tampermonkey userscript
+        run: pnpm --filter @github-unlimited-orgs/tampermonkey run build
+
+      - name: Verify generated versions
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          manifest_version="$(node -p "JSON.parse(require('node:fs').readFileSync('packages/chrome-extension/dist/manifest.json', 'utf8')).version")"
+
+          if [[ "$manifest_version" != "$VERSION" ]]; then
+            echo "Chrome manifest version mismatch: $manifest_version"
+            exit 1
+          fi
+
+          if ! grep -Eq "^// @version[[:space:]]+$VERSION$" packages/tampermonkey/dist/github-unlimited-orgs.user.js; then
+            echo "Tampermonkey version mismatch"
+            exit 1
+          fi
+
+      - name: Package release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p release
+
+          (
+            cd packages/chrome-extension/dist
+            zip -r "$GITHUB_WORKSPACE/release/github-unlimited-orgs-chrome.zip" .
+          )
+
+          cp packages/tampermonkey/dist/github-unlimited-orgs.user.js release/github-unlimited-orgs.user.js
+
+          (
+            cd release
+            sha256sum github-unlimited-orgs-chrome.zip github-unlimited-orgs.user.js > SHA256SUMS
+          )
+
+      - name: Verify Chrome archive
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          unzip -Z1 release/github-unlimited-orgs-chrome.zip | grep -qx 'manifest.json'
+
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          gh release create "$GITHUB_REF_NAME" \
+            release/github-unlimited-orgs-chrome.zip \
+            release/github-unlimited-orgs.user.js \
+            release/SHA256SUMS \
+            --draft \
+            --verify-tag \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "$GITHUB_REF_NAME" --draft=false --latest

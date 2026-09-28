@@ -1,5 +1,6 @@
 {
   "name": "github-unlimited-orgs",
+  "version": "0.2.2",
   "type": "module",
   "private": true,
   "packageManager": "pnpm@12.6.0",
