@@ -18,6 +18,7 @@
     "organizations"
   ],
   "scripts": {
+    "build": "pnpm --filter @github-unlimited-orgs/chrome-extension --filter @github-unlimited-orgs/tampermonkey run build",
     "server:dev": "pnpm -F @github-unlimited-orgs/api run dev",
     "lint": "eslint",
     "lint:fix": "eslint --fix"
