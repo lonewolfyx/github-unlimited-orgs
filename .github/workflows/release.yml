@@ -119,23 +119,33 @@ jobs:
 
           unzip -Z1 release/github-unlimited-orgs-chrome.zip | grep -qx 'manifest.json'
 
-      - name: Create draft release
+      - name: Create release log and upload assets
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          npx --yes genereleaselog@0.0.9 \
+            --output=false \
+            --assets 'release/github-unlimited-orgs-chrome.zip,release/github-unlimited-orgs.user.js,release/SHA256SUMS'
+
+      - name: Verify uploaded release assets
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
 
-          gh release create "$GITHUB_REF_NAME" \
-            release/github-unlimited-orgs-chrome.zip \
-            release/github-unlimited-orgs.user.js \
-            release/SHA256SUMS \
-            --draft \
-            --verify-tag \
-            --title "$GITHUB_REF_NAME" \
-            --generate-notes
+          uploaded_assets="$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name')"
 
-      - name: Publish release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release edit "$GITHUB_REF_NAME" --draft=false --latest
+          for asset in \
+            github-unlimited-orgs-chrome.zip \
+            github-unlimited-orgs.user.js \
+            SHA256SUMS
+          do
+            if ! grep -qx "$asset" <<< "$uploaded_assets"; then
+              echo "Release asset was not uploaded: $asset"
+              exit 1
+            fi
+          done
