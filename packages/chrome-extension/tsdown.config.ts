@@ -1,6 +1,6 @@
 import { defineConfig } from 'tsdown'
 
-// Each entry is a standalone script referenced by manifest.json, so build them
+// Each entry is a standalone script referenced by the generated manifest, so build them
 // in separate runs: multi-entry builds code-split shared modules into chunks,
 // and MV3 content scripts / service workers cannot load chunk imports.
 // No `clean` here: in watch mode each config rebuilds independently, and a
@@ -12,6 +12,7 @@ const shared = {
   platform: 'browser',
   dts: false,
   minify: true,
+  clean: true,
   outputOptions: { entryFileNames: '[name].js' },
 } as const
 

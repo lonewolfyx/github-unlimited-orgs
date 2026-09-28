@@ -6,5 +6,5 @@
     "noUnusedParameters": false,
     "declarationMap": false
   },
-  "include": ["src", "tsdown.config.ts"]
+  "include": ["src", "tsdown.config.ts", "../../scripts/release-version.mjs"]
 }
