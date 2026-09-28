@@ -10,6 +10,7 @@ export default defineConfig({
   dts: false,
   clean: true,
   banner: createUserscriptHeader(getReleaseVersion()),
-  // Full control over the output file name (iife format inserts a .iife infix by default)
-  outputOptions: { entryFileNames: 'github-unlimited-orgs.user.js' },
+  outputOptions: {
+    entryFileNames: 'github-unlimited-orgs.user.js',
+  },
 })
