@@ -12,6 +12,7 @@ const shared = {
   platform: 'browser',
   dts: false,
   minify: true,
+  clean: true,
   outputOptions: { entryFileNames: '[name].js' },
 } as const
 
