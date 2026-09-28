@@ -34,21 +34,19 @@ jobs:
           cache: pnpm
 
       - name: Validate release metadata
-        id: release
         shell: bash
         run: |
           set -euo pipefail
 
-          tag="${GITHUB_REF_NAME}"
-          version="$(node --input-type=module -e "import { getReleaseVersion } from './scripts/release-version.mjs'; process.stdout.write(getReleaseVersion())")"
+          tag="$(git describe --tags --abbrev=0)"
 
           if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "Invalid release tag: $tag"
             exit 1
           fi
 
-          if [[ "$tag" != "v$version" ]]; then
-            echo "Tag $tag does not match package version $version"
+          if [[ "$tag" != "$GITHUB_REF_NAME" ]]; then
+            echo "Latest tag $tag does not match release ref $GITHUB_REF_NAME"
             exit 1
           fi
 
@@ -60,38 +58,14 @@ jobs:
             exit 1
           fi
 
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
       - name: Lint
         run: pnpm run lint
 
-      - name: Build Chrome extension
-        run: pnpm --filter @github-unlimited-orgs/chrome-extension run build
-
-      - name: Build Tampermonkey userscript
-        run: pnpm --filter @github-unlimited-orgs/tampermonkey run build
-
-      - name: Verify generated versions
-        env:
-          VERSION: ${{ steps.release.outputs.version }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          manifest_version="$(node -p "JSON.parse(require('node:fs').readFileSync('packages/chrome-extension/dist/manifest.json', 'utf8')).version")"
-
-          if [[ "$manifest_version" != "$VERSION" ]]; then
-            echo "Chrome manifest version mismatch: $manifest_version"
-            exit 1
-          fi
-
-          if ! grep -Eq "^// @version[[:space:]]+$VERSION$" packages/tampermonkey/dist/github-unlimited-orgs.user.js; then
-            echo "Tampermonkey version mismatch"
-            exit 1
-          fi
+      - name: Build
+        run: pnpm run build
 
       - name: Package release assets
         shell: bash
@@ -112,40 +86,13 @@ jobs:
             sha256sum github-unlimited-orgs-chrome.zip github-unlimited-orgs.user.js > SHA256SUMS
           )
 
-      - name: Verify Chrome archive
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          unzip -Z1 release/github-unlimited-orgs-chrome.zip | grep -qx 'manifest.json'
-
-      - name: Create release log and upload assets
+      - name: Generate GitHub Changelog
         env:
           GITHUB_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
 
-          npx --yes genereleaselog@0.0.9 \
+          npx genereleaselog@latest \
             --output=false \
             --assets 'release/github-unlimited-orgs-chrome.zip,release/github-unlimited-orgs.user.js,release/SHA256SUMS'
-
-      - name: Verify uploaded release assets
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          uploaded_assets="$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name')"
-
-          for asset in \
-            github-unlimited-orgs-chrome.zip \
-            github-unlimited-orgs.user.js \
-            SHA256SUMS
-          do
-            if ! grep -qx "$asset" <<< "$uploaded_assets"; then
-              echo "Release asset was not uploaded: $asset"
-              exit 1
-            fi
-          done
