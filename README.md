@@ -8,6 +8,8 @@
 
 Expand the collapsed `+N more` / `View all` avatar list with native hover cards, powered by a self-hosted API.
 
+📖 [中文文档](./README-zh_CN.md)
+
 </div>
 
 ---
@@ -28,12 +30,6 @@ Expand the collapsed `+N more` / `View all` avatar list with native hover cards,
 - 🗂️ **Session caching** — a 30-minute fresh cache plus a 24-hour stale fallback cuts API calls and tolerates transient failures.
 - 🧵 **Deduplicated requests** — concurrent scans share a single in-flight request, so each profile triggers exactly one API call.
 - 📦 **Two deliverables** — a Chrome MV3 extension and a Tampermonkey userscript, both backed by the same shared core.
-
-## 📸 Demo
-
-| Before | After |
-| --- | --- |
-| ![Before — collapsed to 18 avatars with +23 more](assets/before_organizations.png) | ![After — all 40+ organizations expanded](assets/after_organizations.png) |
 
 ## 🧭 How it works
 
