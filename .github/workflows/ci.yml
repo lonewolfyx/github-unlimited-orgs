@@ -18,8 +18,8 @@ jobs:
           node-version: lts/*
           cache: pnpm
 
-      - name: Install
+      - name: 📦 Install dependencies
         run: pnpm i
 
-      - name: Lint
+      - name: 🔠 Lint project
         run: pnpm run lint
