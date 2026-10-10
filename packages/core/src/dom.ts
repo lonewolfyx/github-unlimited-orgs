@@ -1,7 +1,7 @@
 import type { OrgInfo, ProfileRoute } from './types'
 
 const MORE_TEXT_RE = /^\+\s*\d+\s+more$/iu
-const OVERVIEW_PARAMS = new Set(['', 'overview'])
+const PROFILE_TABS = new Set(['', 'overview', 'repositories', 'projects', 'packages', 'stars'])
 const RESERVED_PATHS = new Set([
   'about',
   'account',
@@ -81,11 +81,10 @@ export function getProfileRoute(url: URL = new URL(location.href)): ProfileRoute
   if (segments.length !== 1)
     return false
 
-  // Never observe repository/star/project tabs: their large dynamic lists caused browser stalls.
+  // These tabs share the profile sidebar. Filtering and pagination parameters
+  // do not change which user's organizations it displays.
   const tab = url.searchParams.get('tab') ?? ''
-  if (!OVERVIEW_PARAMS.has(tab.toLowerCase()))
-    return false
-  if ([...url.searchParams.keys()].some(key => key !== 'tab'))
+  if (!PROFILE_TABS.has(tab.toLowerCase()))
     return false
 
   try {
