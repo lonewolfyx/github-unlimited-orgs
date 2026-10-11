@@ -1,7 +1,7 @@
 import type { OrgInfo, ProfileRoute } from './types'
 
 const MORE_TEXT_RE = /^\+\s*\d+\s+more$/iu
-const PROFILE_TABS = new Set(['', 'overview', 'repositories', 'projects', 'packages', 'stars'])
+const PROFILE_TABS = new Set(['', 'overview', 'repositories', 'projects', 'packages', 'stars', 'following', 'followers'])
 const RESERVED_PATHS = new Set([
   'about',
   'account',
