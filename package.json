@@ -1,7 +1,7 @@
 {
   "name": "github-unlimited-orgs",
   "type": "module",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "private": true,
   "packageManager": "pnpm@12.9.1",
   "description": "Show all GitHub organizations for any user — API + browser extension + Tampermonkey script",
