@@ -26,9 +26,7 @@ export function parsePanelOptions(value: PanelOptions | false): OrgInfo[] | fals
 }
 
 /**
- * Runs inside GitHub's page context (MAIN world). Keep this function fully
- * self-contained: the tampermonkey build serializes it with .toString() into
- * an injected script element, so it must not reference any outer scope.
+ * Runs inside GitHub's page context (MAIN world) in the Chrome extension.
  *
  * When a signed-in user visits a profile, GitHub requests side-panel data from
  * "/_side-panels/user.json". The response's userStatus.organizationOptions

@@ -1,5 +1,26 @@
-import type { ApiOrg, FetchOrgsResponse, OrgInfo } from '@github-unlimited-orgs/core'
-import { API_BASE_URL, API_TIMEOUT_MS, createOrgRequester, normalizeOrgInfo } from '@github-unlimited-orgs/core'
+import type { ApiOrg, FetchOrgsResponse, OrgInfo, SidePanelData } from '@github-unlimited-orgs/core'
+import { API_BASE_URL, API_TIMEOUT_MS, createOrgRequester, normalizeOrgInfo, parsePanelOptions } from '@github-unlimited-orgs/core'
+
+/** Read the signed-in user's complete list without page-script injection or a prior GitHub fetch. */
+export async function requestSelfOrganizations(): Promise<FetchOrgsResponse> {
+  try {
+    const response = await fetch('/_side-panels/user.json', {
+      credentials: 'same-origin',
+      signal: AbortSignal.timeout(API_TIMEOUT_MS),
+    })
+    if (!response.ok)
+      return { ok: false, error: `GitHub side-panel request failed: HTTP ${response.status}` }
+
+    const payload = await response.json() as Partial<SidePanelData>
+    const orgs = parsePanelOptions(payload?.userStatus?.organizationOptions ?? false)
+    return orgs
+      ? { ok: true, data: orgs }
+      : { ok: false, error: 'Unexpected GitHub side-panel response format' }
+  }
+  catch {
+    return { ok: false, error: 'GitHub side-panel request failed' }
+  }
+}
 
 function requestApi(username: string): Promise<FetchOrgsResponse> {
   const url = `${API_BASE_URL}/${encodeURIComponent(username)}`

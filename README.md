@@ -24,7 +24,7 @@ Expand the collapsed `+N more` / `View all` avatar list with native hover cards,
 
 - 🔍 **Full organization list** — GitHub only exposes a handful of avatars and hides the rest behind `+N more`. This project loads the complete list for any user.
 - 👤 **Smart routing** — detects the signed-in user's own profile (`View all` / `/settings/organizations`) and other users' profiles (`+N more`) and serves each through the optimal channel.
-- ⚡ **No data loss** — your own profile is served from GitHub's intercepted `/_side-panels/user.json` response, with a request–replay mechanism so data is never lost to injection timing.
+- ⚡ **Reliable self-profile data** — Tampermonkey reads GitHub's `/_side-panels/user.json` directly with your current session. The Chrome extension reuses intercepted responses with request–replay support.
 - 🪝 **Native hover cards** — injected avatars keep the original `data-hovercard-url` attribute, so GitHub's hover cards work exactly as expected.
 - 🔁 **SPA-aware** — survives GitHub's soft navigation (`turbo:load`, `pjax:end`, `popstate`) and self-heals when a re-render strips the injected avatars.
 - 🗂️ **Session caching** — a 30-minute fresh cache plus a 24-hour stale fallback cuts API calls and tolerates transient failures.
@@ -36,7 +36,7 @@ Expand the collapsed `+N more` / `View all` avatar list with native hover cards,
 ```mermaid
 flowchart LR
     A[GitHub profile] --> B{Which entry?}
-    B -->|"View all (self)"| C[Intercept _side-panels/user.json]
+    B -->|"View all (self)"| C[Read _side-panels/user.json]
     B -->|"+N more (other user)"| D[Project API]
     C --> E[Render avatars]
     D --> F["GET /:username<br/>(Nitro + Octokit)"]
@@ -45,7 +45,7 @@ flowchart LR
 
 1. The **content script** discovers the `Organizations` section on a profile page.
 2. For `+N more` (another user), it queries the self-hosted **API**, which paginates GitHub's org list and batch-fetches each org's details.
-3. For `View all` (your own profile), it reuses the side-panel data GitHub already loaded, avoiding an extra request.
+3. For `View all` (your own profile), Tampermonkey requests GitHub's side-panel data directly. The Chrome extension reuses the side-panel response GitHub already loaded.
 4. Missing avatars are injected into the native `a.avatar-group-item` structure with preserved hover-card attributes.
 
 ---
