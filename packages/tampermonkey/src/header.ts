@@ -11,7 +11,6 @@ export function createUserscriptHeader(version: string): string {
 // @match        https://github.com/*
 // @run-at       document-start
 // @sandbox      DOM
-// @grant        GM_addElement
 // @grant        GM_xmlhttpRequest
 // @connect      github-unlimited-orgs.vercel.app
 // @noframes

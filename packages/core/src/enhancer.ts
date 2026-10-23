@@ -7,6 +7,7 @@ const SECTION_DISCOVERY_WINDOW_MS = 10_000
 
 export interface EnhancerOptions {
   requestOrganizations: OrgTransport
+  requestSelfOrganizations?: OrgTransport
 }
 
 /**
@@ -14,9 +15,9 @@ export interface EnhancerOptions {
  * profile pages, loads the complete organization list, renders the missing
  * avatars, and keeps them alive across SPA navigations and re-renders.
  *
- * The signed-in user's own profile ("View all") is served from the intercepted
- * side-panel response; other profiles ("+N more") go through the injected
- * platform transport.
+ * The signed-in user's own profile ("View all") uses a platform-provided
+ * self request or the intercepted side-panel response; other profiles
+ * ("+N more") go through the public organization transport.
  */
 export function startProfileEnhancer(options: EnhancerOptions): void {
   const { requestOrganizations } = options
@@ -66,6 +67,10 @@ export function startProfileEnhancer(options: EnhancerOptions): void {
 
   async function loadOrganizations(route: ProfileRoute, isSelf: boolean): Promise<OrgInfo[] | false> {
     if (isSelf) {
+      if (options.requestSelfOrganizations) {
+        const response = await options.requestSelfOrganizations(route.username)
+        return response.ok ? response.data : false
+      }
       // "View all" belongs to the signed-in user's profile. GitHub already
       // fetches the complete list in user.json; request a replay of that
       // intercepted response instead of querying the public API.
@@ -137,7 +142,7 @@ export function startProfileEnhancer(options: EnhancerOptions): void {
   function observeUntilReady(route: ProfileRoute): void {
     if (discoveryObserver)
       return
-    const root = document.querySelector('main') ?? document.body ?? document.documentElement
+    const root = document.querySelector('main') ?? document.body ?? document
     let scheduled = false
     discoveryObserver = new MutationObserver((records) => {
       if (scheduled)
@@ -172,7 +177,7 @@ export function startProfileEnhancer(options: EnhancerOptions): void {
     const route = getProfileRoute()
     if ((route ? route.key : '') !== (activeRoute ? activeRoute.key : ''))
       reset(route)
-    if (route)
+    if (route && !options.requestSelfOrganizations)
       requestPanel(route)
     if (route && !(renderHandle && renderHandle.isConnected()))
       start(route)
@@ -208,5 +213,6 @@ export function startProfileEnhancer(options: EnhancerOptions): void {
   for (const eventName of ['turbo:load', 'soft-nav:end', 'pjax:end', 'popstate'] as const)
     addEventListener(eventName, scheduleNavigation, true)
 
+  document.addEventListener('DOMContentLoaded', scheduleNavigation, { once: true })
   onNavigate()
 }

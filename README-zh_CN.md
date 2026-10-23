@@ -21,7 +21,7 @@
 
 - 🔍 **完整组织列表** — GitHub 只会展示少数几个头像，其余的都藏在 `+N more` 之后。本项目会为任意用户加载完整的组织列表。
 - 👤 **智能路由** — 自动识别已登录用户自己的主页（`View all` / `/settings/organizations`）和其他用户主页（`+N more`），并分别通过最优通道提供数据。
-- ⚡ **数据零丢失** — 你自己的主页数据来自 GitHub 被劫持的 `/_side-panels/user.json` 响应，并配合请求-回放机制，确保数据不会因注入时机而丢失。
+- ⚡ **可靠的本人数据获取** — Tampermonkey 使用当前登录会话直接读取 GitHub 的 `/_side-panels/user.json`；Chrome 扩展复用拦截到的响应，并支持请求回放。
 - 🪝 **原生悬停卡片** — 注入的头像保留原生 `data-hovercard-url` 属性，GitHub 的悬停卡片完全正常工作。
 - 🔁 **SPA 感知** — 能应对 GitHub 的软导航（`turbo:load`、`pjax:end`、`popstate`），并在页面重渲染撕掉注入头像后自愈。
 - 🗂️ **会话缓存** — 30 分钟新鲜缓存 + 24 小时陈旧兜底，减少 API 调用并容忍瞬时故障。
@@ -33,7 +33,7 @@
 ```mermaid
 flowchart LR
     A[GitHub 主页] --> B{哪个入口？}
-    B -->|"View all（本人）"| C[劫持 _side-panels/user.json]
+    B -->|"View all（本人）"| C[读取 _side-panels/user.json]
     B -->|"+N more（他人）"| D[项目 API]
     C --> E[渲染头像]
     D --> F["GET /:username<br/>（Nitro + Octokit）"]
@@ -42,7 +42,7 @@ flowchart LR
 
 1. **内容脚本** 在主页上发现 `Organizations` 区块。
 2. 对于 `+N more`（他人主页），它请求自托管的 **API**，该 API 会分页拉取 GitHub 组织列表并批量获取每个组织的详情。
-3. 对于 `View all`（你自己的主页），它复用 GitHub 已加载的侧边栏数据，避免额外请求。
+3. 对于 `View all`（你自己的主页），Tampermonkey 直接请求 GitHub 侧边栏数据；Chrome 扩展复用 GitHub 已加载的侧边栏响应。
 4. 缺失的头像被注入到原生 `a.avatar-group-item` 结构中，并保留悬停卡片属性。
 
 ---

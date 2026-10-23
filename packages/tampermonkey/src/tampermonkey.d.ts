@@ -21,8 +21,3 @@ interface GmRequestDetails<T> {
 }
 
 declare function GM_xmlhttpRequest<T>(details: GmRequestDetails<T>): GmRequestControl
-
-declare function GM_addElement(
-  tagName: string,
-  attributes: Record<string, string>,
-): HTMLElement | null

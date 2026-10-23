@@ -1,6 +1,4 @@
 import { startProfileEnhancer } from '@github-unlimited-orgs/core'
-import { requestOrganizations } from './api'
-import { installPageInterceptor } from './page-interceptor'
+import { requestOrganizations, requestSelfOrganizations } from './api'
 
-installPageInterceptor()
-startProfileEnhancer({ requestOrganizations })
+startProfileEnhancer({ requestOrganizations, requestSelfOrganizations })
