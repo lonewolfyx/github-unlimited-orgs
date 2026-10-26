@@ -9,7 +9,7 @@
   "devDependencies": {
     "@github-unlimited-orgs/core": "workspace:*",
     "@github-unlimited-orgs/tsconfig": "workspace:*",
-    "@types/chrome": "^0.3.5",
-    "tsdown": "^0.23.1"
+    "@types/chrome": "^0.3.6",
+    "tsdown": "^0.23.2"
   }
 }
